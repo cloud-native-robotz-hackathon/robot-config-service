@@ -132,7 +132,24 @@ ansible-playbook -i deploy/inventory.robots.yml deploy/deploy-robots.yml
 # Or update only override: --tags config
 ```
 
-Optional inventory vars (see template): `ansible_playbook_path`, `log_level`, `tunnel_check_initial_delay`, `tunnel_check_retries`, `tunnel_check_interval`, `redirect_url_is_cluster`, `redirect_retries`, `redirect_retry_delay`.
+**Override variables (inventory)**  
+When using Option A, these inventory vars are passed to `deploy/templates/override.conf.j2`:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `api_username` | Yes* | Basic auth username for redirect and cluster API. |
+| `api_password` | Yes* | Basic auth password. |
+| `redirect_url` | Yes* | Short URL that redirects to the cluster (e.g. `https://short.domain/path`). |
+| `ansible_playbook_path` | No | Override playbook path (default on robot: `/opt/robot-config/ansible/configure-skupper.yml`). |
+| `log_level` | No | Logging level (e.g. `INFO`, `DEBUG`). |
+| `tunnel_check_initial_delay` | No | Seconds before first tunnel check after reboot (default: 45). |
+| `tunnel_check_retries` | No | Number of tunnel status checks (default: 3). |
+| `tunnel_check_interval` | No | Seconds between tunnel check retries (default: 30). |
+| `redirect_url_is_cluster` | No | Set to a truthy value if `redirect_url` is already the full cluster/eventId URL (no redirect to follow). |
+| `redirect_retries` | No | Retries when following redirect URL (default: 3). |
+| `redirect_retry_delay` | No | Seconds between redirect retries (default: 10). |
+
+\* Required only when generating the override from inventory (Option A). Omit them to use Option B (manual override on each robot).
 
 **Note:** If you store credentials in the inventory, keep that file private (e.g. `deploy/inventory.robots.yml` is in `.gitignore`).
 
