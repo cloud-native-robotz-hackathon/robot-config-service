@@ -1,0 +1,229 @@
+---
+# Ansible playbook for deploying Robot Config Service to multiple robots
+#
+# Usage:
+#   ansible-playbook -i deploy/inventory.robots.yml deploy/deploy-robots.yml
+#
+# Update only the Python service script (after initial deploy):
+#   ansible-playbook -i deploy/inventory.robots.yml deploy/deploy-robots.yml --tags python
+#
+# Other tags: ansible (playbook/inventory/roles), systemd (unit/override), config (override from inventory), deps (apt/pip/collections)
+#
+# To configure the service override from inventory, set in group or host vars:
+#   api_username, api_password, redirect_url  (required for override-from-inventory)
+# Optional: ansible_playbook_path, log_level, tunnel_check_*, redirect_*, redirect_url_is_cluster
+#
+# Requirements:
+#   - Ansible 2.9+
+#   - SSH access to robots (with sudo privileges)
+#   - robots must have Python 3 installed
+
+- name: Deploy Robot Config Service to robots
+  hosts: robots
+  become: yes
+  gather_facts: yes
+
+  vars:
+    # Paths are relative to project root (parent of deploy/)
+    project_root: "{{ playbook_dir }}/.."
+    install_dir: /opt/robot-config
+    service_name: robot-config-service
+
+  tasks:
+    - name: Check Python 3 is available
+      ansible.builtin.command: python3 --version
+      register: python3_check
+      changed_when: false
+      failed_when: false
+      tags: [deps, always]
+
+    - name: Fail if Python 3 is not available
+      ansible.builtin.fail:
+        msg: "Python 3 is required but not found on {{ inventory_hostname }}"
+      when: python3_check.rc != 0
+      tags: [deps, always]
+
+    - name: Install system dependencies
+      ansible.builtin.apt:
+        name:
+          - python3-pip
+          - ansible
+        state: present
+        update_cache: yes
+      tags: deps
+
+    - name: Install Python dependencies
+      ansible.builtin.pip:
+        name:
+          - requests
+        state: present
+        executable: pip3
+      tags: deps
+
+    - name: Install Ansible Kubernetes collection
+      ansible.builtin.command:
+        cmd: ansible-galaxy collection install kubernetes.core
+      args:
+        creates: "{{ ansible_env.HOME }}/.ansible/collections/ansible_collections/kubernetes/core"
+      changed_when: true
+      tags: deps
+
+    - name: Create installation directory
+      ansible.builtin.file:
+        path: "{{ install_dir }}"
+        state: directory
+        mode: '0755'
+      tags: [python, ansible, systemd]
+
+    - name: Create ansible subdirectory
+      ansible.builtin.file:
+        path: "{{ install_dir }}/ansible"
+        state: directory
+        mode: '0755'
+      tags: [ansible, python]
+
+    - name: Copy main service script
+      ansible.builtin.copy:
+        src: "{{ project_root }}/robot_config_service.py"
+        dest: "{{ install_dir }}/robot_config_service.py"
+        mode: '0755'
+        owner: root
+        group: root
+      tags: python
+
+    - name: Copy Ansible playbook
+      ansible.builtin.copy:
+        src: "{{ project_root }}/ansible/configure-skupper.yml"
+        dest: "{{ install_dir }}/ansible/configure-skupper.yml"
+        mode: '0644'
+        owner: root
+        group: root
+      tags: ansible
+
+    - name: Copy Ansible inventory
+      ansible.builtin.copy:
+        src: "{{ project_root }}/ansible/inventory"
+        dest: "{{ install_dir }}/ansible/inventory"
+        mode: '0644'
+        owner: root
+        group: root
+      tags: ansible
+
+    - name: Copy Ansible roles
+      ansible.builtin.copy:
+        src: "{{ project_root }}/ansible/roles/"
+        dest: "{{ install_dir }}/ansible/"
+        mode: preserve
+        owner: root
+        group: root
+      tags: ansible
+
+    - name: Create log file
+      ansible.builtin.file:
+        path: /var/log/robot-config-service.log
+        state: touch
+        mode: '0644'
+        owner: root
+        group: root
+      tags: systemd
+
+    - name: Install systemd service file
+      ansible.builtin.copy:
+        src: "{{ project_root }}/robot-config-service.service"
+        dest: /etc/systemd/system/{{ service_name }}.service
+        mode: '0644'
+        owner: root
+        group: root
+      notify: reload systemd
+      tags: systemd
+
+    - name: Create systemd override directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/{{ service_name }}.service.d
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      tags: systemd
+
+    - name: Check if override config exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/{{ service_name }}.service.d/override.conf
+      register: override_config_file
+      tags: [systemd, config]
+
+    - name: Create override from inventory variables
+      ansible.builtin.template:
+        src: templates/override.conf.j2
+        dest: /etc/systemd/system/{{ service_name }}.service.d/override.conf
+        mode: '0600'
+        owner: root
+        group: root
+      when: >
+        api_username is defined and api_username | length > 0 and
+        api_password is defined and api_password | length > 0 and
+        redirect_url is defined and redirect_url | length > 0
+      notify: reload systemd
+      tags: [systemd, config]
+
+    - name: Copy configuration template (if override doesn't exist and not from inventory)
+      ansible.builtin.copy:
+        src: "{{ project_root }}/robot-config-service.service.d-override.conf.example"
+        dest: /etc/systemd/system/{{ service_name }}.service.d/override.conf
+        mode: '0644'
+        owner: root
+        group: root
+      when: >
+        not override_config_file.stat.exists and
+        not (api_username is defined and api_username | length > 0 and
+             api_password is defined and api_password | length > 0 and
+             redirect_url is defined and redirect_url | length > 0)
+      tags: systemd
+
+    - name: Warn if override config exists but was not generated from inventory
+      ansible.builtin.debug:
+        msg: |
+          Override exists; ensure it contains API_USERNAME, API_PASSWORD, REDIRECT_URL.
+          To manage from inventory, set api_username, api_password, redirect_url in inventory and use --tags config.
+      when: >
+        override_config_file.stat.exists and
+        not (api_username is defined and api_username | length > 0 and
+             api_password is defined and api_password | length > 0 and
+             redirect_url is defined and redirect_url | length > 0)
+      tags: systemd
+
+    - name: Enable service (but don't start yet)
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        enabled: yes
+        state: stopped
+      when: >
+        override_config_file.stat.exists or
+        (api_username is defined and api_username | length > 0 and
+         api_password is defined and api_password | length > 0 and
+         redirect_url is defined and redirect_url | length > 0)
+      tags: systemd
+
+    - name: Warn about configuration requirement (no override and no inventory vars)
+      ansible.builtin.debug:
+        msg: |
+          ============================================
+          Deployment complete for {{ inventory_hostname }}
+          ============================================
+          
+          Set api_username, api_password, redirect_url in inventory and re-run with --tags config,
+          OR on the robot:
+            sudo nano /etc/systemd/system/{{ service_name }}.service.d/override.conf
+          Then: sudo systemctl daemon-reload && sudo systemctl start {{ service_name }}
+          ============================================
+      when: >
+        not override_config_file.stat.exists and
+        not (api_username is defined and api_username | length > 0 and
+             api_password is defined and api_password | length > 0 and
+             redirect_url is defined and redirect_url | length > 0)
+      tags: systemd
+
+  handlers:
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: yes

@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local test files
+/etc/eventid
+
+# Ansible deployment files (may contain sensitive info)
+deploy/inventory.robots
+deploy/inventory.robots.yml
+deploy/group_vars/*/vault.yml
+deploy/*.vault
+
+# Binaries / downloads
+*.tgz
+
+# Stray / editor artifacts
+{changed*

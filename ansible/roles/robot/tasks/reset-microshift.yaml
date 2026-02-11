@@ -1,0 +1,159 @@
+---
+# Check disk
+- name: Get first mount
+  ansible.builtin.set_fact:
+    mount: "{{ ansible_mounts | first }}"
+
+#- name: Calculation...
+#  ansible.builtin.set_fact: 
+#    disk_usage: "{{ mount.size_total - mount.size_available }}"
+#- name: Calculation...
+#  ansible.builtin.set_fact: 
+#    disk_usage_ratio: "{{ disk_usage|float / mount.size_total }}"
+#- name: Calculation...
+#  ansible.builtin.set_fact: 
+#    disk_usage_s: "{{ (disk_usage|float / 1000000000) | round(1, 'common') }}GB"
+#    disk_total_s: "{{ (mount.size_total / 1000000000) | round(1, 'common') }}GB"
+#    disk_usage_ratio_s: "{{ 100 * (disk_usage_ratio|float) | round(1, 'common') }}%"
+#    disk_limit_ratio_s: "{{ (100 * disk_limit|float) |round }}%"
+
+#- name: Disk usage report
+#  ansible.builtin.debug:
+#    msg: "disk usage {{ disk_usage_s }} of total {{ disk_total_s }} ({{ disk_usage_ratio_s }}) (should be within limit {{ disk_limit_ratio_s }})"
+
+#- name: Check disk
+#  ansible.builtin.assert:
+#    that: ( (disk_usage|float)/mount.size_total ) < disk_limit|float
+#    msg: "Disk usage {{ disk_usage_ratio_s }} exceeds {{ disk_limit_ratio_s }}"
+#  any_errors_fatal: true
+
+- name: Stop microshift
+  ansible.builtin.systemd_service:
+    state: stopped
+    name: microshift.service
+
+- name: Clean /var/lib/microshift
+  ansible.builtin.file:
+    state: absent
+    path: /var/lib/microshift
+
+- name: Check / configure /etc/hosts (robot.local, $inventoryname.lan)
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: 'robot\.local'
+    line: "{{ ansible_host }} robot.local {{ ansible_hostname.split('.') | first }}.lan {{ ansible_hostname }}"
+
+- name: Creating Microshift config
+  ansible.builtin.copy:
+    dest: "/etc/microshift/config.yaml"
+    content: |
+      cluster:
+        domain: apps.{{ ansible_hostname }}
+
+- name: Create /var/lib/microshift/manifests
+  ansible.builtin.file:
+    path: /var/lib/microshift/manifests
+    state: directory
+    mode: '0755'
+
+- name: Creating /var/lib/microshift/manifests/pin-triton.yaml
+  ansible.builtin.copy:
+    dest: "/var/lib/microshift/manifests/pin-triton.yaml"
+    content: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: pin-triton-server
+        namespace: default
+      spec:
+        priorityClassName: system-node-critical
+        containers:
+          - name: triton
+            image: quay.io/cloud-native-robotz-hackathon/tritonserver:24.08-py3
+            imagePullPolicy: Never
+            resources:
+              limits:
+                memory: "28Mi"
+                cpu: "200m"
+              requests:
+                memory: "28Mi"
+                cpu: "200m"
+            command:
+              - "/bin/sh"
+              - "-c"
+              - "sleep infinity"
+        restartPolicy: Never
+
+- name: Creating /var/lib/microshift/manifests/kustomization.yaml
+  ansible.builtin.copy:
+    dest: "/var/lib/microshift/manifests/kustomization.yaml"
+    content: |
+      apiVersion: kustomize.config.k8s.io/v1beta1
+      kind: Kustomization
+      resources:
+        - pin-triton.yaml
+
+- name: Start microshift
+  ansible.builtin.systemd_service:
+    state: started
+    name: microshift.service
+
+- name: Wait for /var/lib/microshift/resources/kubeadmin/kubeconfig
+  ansible.builtin.wait_for:
+    path: /var/lib/microshift/resources/kubeadmin/kubeconfig
+    state: present
+    msg: Timeout to find file kubeconfig
+
+- name: ~/.kube/
+  ansible.builtin.file:
+    state: directory
+    path: ~/.kube/
+
+- name: Install kubeconfig to root user
+  ansible.builtin.copy:
+    src: "/var/lib/microshift/resources/kubeadmin/kubeconfig"
+    dest: "~/.kube/config"
+    remote_src: yes
+
+- name: Copy kubeconfig
+  ansible.builtin.copy:
+    src: "/var/lib/microshift/resources/kubeadmin/kubeconfig"
+    dest: "kubeconfig-{{ ansible_hostname }}"
+    remote_src: yes
+
+
+- name: Read kubeconfig
+  include_vars:
+    file: "kubeconfig-{{ ansible_hostname }}"
+    name: kubeconfig
+
+- name: Rebuild new kubeconfig
+  set_fact:
+    kubeconfig: "{{ kubeconfig | combine(fields_to_change, recursive=true) }}"
+  vars:
+    fields_to_change:
+      clusters:
+        - name: "{{ ansible_hostname.split('.') | first }}"
+          cluster:
+            server: "https://{{ ansible_hostname }}:6443"
+            insecure-skip-tls-verify: true
+      contexts:
+        - name: "{{ ansible_hostname.split('.') | first }}"
+          context: 
+            cluster: "{{ ansible_hostname.split('.') | first }}"
+            namespace: "default"
+            user: "user"
+      current-context: "{{ ansible_hostname.split('.') | first }}"
+
+- name: "Write kubeconfig"
+  copy:
+    content: "{{ kubeconfig | to_nice_yaml }}"
+    dest: "kubeconfig-{{ ansible_hostname }}"
+
+- name: Wait for api
+  ansible.builtin.wait_for:
+    port: 6443
+
+- name: Info
+  ansible.builtin.debug:
+    msg: "Run export KUBECONFIG=kubeconfig-{{ ansible_hostname }}; to have oc/kubectl access."

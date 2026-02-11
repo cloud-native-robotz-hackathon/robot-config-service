@@ -1,0 +1,156 @@
+---
+# Ansible playbook for configuring skupper tunnel FROM robot TO OpenShift cluster
+# This playbook receives the full Skupper connection-token Secret (YAML) via SKUPPER_TOKEN
+# and applies it on the robot to establish the link from the robot to the OpenShift cluster
+
+- hosts: localhost
+  connection: local
+  gather_facts: yes
+  tags: 
+    -  robots
+  tasks:
+
+    - name: Reset MicroShift
+      ansible.builtin.include_role:
+        name: robot
+        tasks_from: reset-microshift.yaml
+
+    - name: Download kubeconfig
+      ansible.builtin.include_role:
+        name: robot
+        tasks_from: download-kubeconfig.yaml
+
+    - name: Destroy skupper namespace
+      kubernetes.core.k8s:
+        state: absent
+        wait: true
+        kubeconfig: "kubeconfig-{{ ansible_hostname }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: skupper
+          spec: {}
+
+    - name: Create skupper namespace
+      kubernetes.core.k8s:
+        state: present
+        wait: true
+        kubeconfig: "kubeconfig-{{ ansible_hostname }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: skupper
+          spec: {}
+    
+    - name: Download skupper
+      ansible.builtin.get_url:
+        url: https://github.com/skupperproject/skupper/releases/download/1.9.4/skupper-cli-1.9.4-linux-arm64.tgz
+        dest: /tmp/skupper.tgz
+        checksum: md5:8b3f7fb0953572e0ef976eee2da1ffce
+
+    - name: Unarchive skupper
+      ansible.builtin.unarchive:
+        src: /tmp/skupper.tgz
+        dest: /usr/local/bin
+        remote_src: yes
+
+    - name: Init Skupper
+      ansible.builtin.shell:
+        cmd: "/usr/local/bin/skupper init --ingress none --namespace skupper --site-name {{ ansible_hostname }}"
+
+    - name: Get skupper token from environment
+      ansible.builtin.set_fact:
+        token_raw: "{{ lookup('env', 'SKUPPER_TOKEN') }}"
+      failed_when: token_raw == ""
+
+    - name: Parse token and set namespace for robot
+      ansible.builtin.set_fact:
+        token: "{{ token_raw | from_yaml | combine(token_changes, recursive=true) }}"
+      vars:
+        token_changes:
+          metadata:
+            namespace: skupper
+            resourceVersion: null
+            uid: null
+            creationTimestamp: null
+
+    - name: Write token to temp file
+      ansible.builtin.copy:
+        content: "{{ token | to_nice_yaml }}"
+        dest: /tmp/skupper-token.yaml
+        mode: '0600'
+
+    - name: Apply token at robot
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ playbook_dir }}/kubeconfig-{{ ansible_hostname }}"
+        src: /tmp/skupper-token.yaml
+
+    - name: Remove temp token file
+      ansible.builtin.file:
+        path: /tmp/skupper-token.yaml
+        state: absent
+
+    - name: Deploy reverse proxy
+      tags:
+        - deploy-reverse-proxy
+        - reverse-proxy
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "kubeconfig-{{ ansible_hostname  }}"
+        wait: yes
+        wait_condition:
+          type: Available
+          status: "True"
+          reason: MinimumReplicasAvailable
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ ansible_hostname }}"
+            namespace: skupper
+            labels:
+              app: reverse-proxy
+              app.openshift.io/runtime: traefik
+              app.kubernetes.io/part-of: reverse-proxy
+          spec:
+            replicas: 1
+            strategy:
+              type: Recreate
+            selector:
+              matchLabels:
+                app: reverse-proxy
+            template:
+              metadata:
+                labels:
+                  app: reverse-proxy
+              spec:
+                automountServiceAccountToken: false
+                containers:
+                  - image: quay.io/cloud-native-robotz-hackathon/ubi-traefik:20250324T164622
+                    name: traefik
+                    ports:
+                      - name: edge-controller
+                        containerPort: 5000
+                      - name: k8s-api
+                        containerPort: 6443
+                      - name: ingress-http
+                        containerPort: 80
+                      - name: ingress-https
+                        containerPort: 443
+                    env:
+                      - name: HOST_IP
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: status.hostIP        
+
+      # skupper expose deployment --namespace skupper reverse-proxy
+      # deployment reverse-proxy exposed as reverse-proxy
+    - name: Expose reverse-proxy
+      tags:
+        - reverse-proxy
+        - expose-reverse-proxy
+      ansible.builtin.shell:
+        cmd: "/usr/local/bin/skupper expose deployment --namespace skupper {{ ansible_hostname }}"

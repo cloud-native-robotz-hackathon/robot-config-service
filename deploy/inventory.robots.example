@@ -1,0 +1,24 @@
+# Example Ansible inventory for robot deployment
+#
+# Copy to inventory.robots.yml and set your robots, SSH key, and optionally
+# service config (api_username, api_password, redirect_url) so the override is
+# generated from inventory instead of editing on each robot.
+#
+#   cp deploy/inventory.robots.example deploy/inventory.robots.yml
+#   nano deploy/inventory.robots.yml
+#
+#   ansible-playbook -i deploy/inventory.robots.yml deploy/deploy-robots.yml
+
+robots:
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: ~/.ssh/robot-hackathon
+    # Uncomment and set to generate /etc/systemd/.../override.conf from inventory:
+    # api_username: "your_api_user"
+    # api_password: "your_api_password"
+    # redirect_url: "https://your-short-redirect.example.com/path"
+  hosts:
+    robot1:
+      ansible_host: 192.168.1.100
+    robot2:
+      ansible_host: 192.168.1.101

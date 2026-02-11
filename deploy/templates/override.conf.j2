@@ -1,0 +1,29 @@
+[Service]
+# Generated from Ansible inventory - set api_username, api_password, redirect_url in inventory
+Environment="API_USERNAME={{ api_username }}"
+Environment="API_PASSWORD={{ api_password }}"
+Environment="REDIRECT_URL={{ redirect_url }}"
+{% if ansible_playbook_path is defined and ansible_playbook_path %}
+Environment="ANSIBLE_PLAYBOOK_PATH={{ ansible_playbook_path }}"
+{% endif %}
+{% if log_level is defined and log_level %}
+Environment="LOG_LEVEL={{ log_level }}"
+{% endif %}
+{% if tunnel_check_initial_delay is defined and tunnel_check_initial_delay | string != '' %}
+Environment="TUNNEL_CHECK_INITIAL_DELAY={{ tunnel_check_initial_delay }}"
+{% endif %}
+{% if tunnel_check_retries is defined and tunnel_check_retries | string != '' %}
+Environment="TUNNEL_CHECK_RETRIES={{ tunnel_check_retries }}"
+{% endif %}
+{% if tunnel_check_interval is defined and tunnel_check_interval | string != '' %}
+Environment="TUNNEL_CHECK_INTERVAL={{ tunnel_check_interval }}"
+{% endif %}
+{% if redirect_url_is_cluster is defined and redirect_url_is_cluster | default(false) %}
+Environment="REDIRECT_URL_IS_CLUSTER=1"
+{% endif %}
+{% if redirect_retries is defined and redirect_retries | string != '' %}
+Environment="REDIRECT_RETRIES={{ redirect_retries }}"
+{% endif %}
+{% if redirect_retry_delay is defined and redirect_retry_delay | string != '' %}
+Environment="REDIRECT_RETRY_DELAY={{ redirect_retry_delay }}"
+{% endif %}

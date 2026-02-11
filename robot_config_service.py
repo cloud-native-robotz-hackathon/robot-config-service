@@ -1,0 +1,397 @@
+#!/usr/bin/env python3
+"""
+Robot Config Service - MVP
+
+This service runs on a Raspberry Pi robot as a systemd service and checks on startup:
+1. Reads locally cached event ID from /etc/eventid
+2. Queries a fixed redirect URL that points to the current OpenShift event cluster
+3. On that cluster, queries the event ID and checks if it's a new event
+4. If new event: gets skupper token and runs ansible playbook to set up tunnel
+5. If no cached event ID (robot rebooted): just checks if skupper tunnel is up
+
+The service runs once on startup - event IDs don't change while the robot is running.
+"""
+
+import os
+import sys
+import json
+import logging
+import subprocess
+import socket
+import time
+import requests
+from urllib.parse import urlparse
+from requests.auth import HTTPBasicAuth
+from pathlib import Path
+from typing import Optional
+
+# Configuration
+EVENT_ID_FILE = Path("/etc/eventid")
+REDIRECT_URL = os.getenv("REDIRECT_URL", "")
+ANSIBLE_PLAYBOOK_PATH = os.getenv("ANSIBLE_PLAYBOOK_PATH", "/opt/robot-config/ansible/configure-skupper.yml")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+API_USERNAME = os.getenv("API_USERNAME", "")
+API_PASSWORD = os.getenv("API_PASSWORD", "")
+# Tunnel check: initial delay (s), then retries with interval (s) between. Playbook only if all checks say "down".
+TUNNEL_CHECK_INITIAL_DELAY = int(os.getenv("TUNNEL_CHECK_INITIAL_DELAY", "45"))
+TUNNEL_CHECK_RETRIES = int(os.getenv("TUNNEL_CHECK_RETRIES", "3"))
+TUNNEL_CHECK_INTERVAL = int(os.getenv("TUNNEL_CHECK_INTERVAL", "30"))
+# Redirect: retries and delay (s) for transient connection/network failures at boot
+REDIRECT_RETRIES = int(os.getenv("REDIRECT_RETRIES", "3"))
+REDIRECT_RETRY_DELAY = int(os.getenv("REDIRECT_RETRY_DELAY", "10"))
+# If set (1/true/yes), REDIRECT_URL is the cluster/eventId URL; do not perform a GET to follow redirects
+REDIRECT_URL_IS_CLUSTER = os.getenv("REDIRECT_URL_IS_CLUSTER", "").lower() in ("1", "true", "yes")
+
+# Setup logging
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('/var/log/robot-config-service.log'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+
+class RobotConfigService:
+    """Main service class for robot configuration management."""
+    
+    def __init__(self):
+        self.event_id_file = EVENT_ID_FILE
+        self.redirect_url = REDIRECT_URL
+        if not self.redirect_url:
+            logger.error("REDIRECT_URL environment variable is not set - service cannot run")
+            raise ValueError("REDIRECT_URL environment variable is required")
+        self.ansible_playbook_path = ANSIBLE_PLAYBOOK_PATH
+        self.cluster_base_url = None  # Will be set after following redirect
+        self.auth = None
+        if API_USERNAME and API_PASSWORD:
+            self.auth = HTTPBasicAuth(API_USERNAME, API_PASSWORD)
+            logger.info("Basic authentication configured")
+        else:
+            logger.warning("API_USERNAME or API_PASSWORD not set - API calls may fail")
+        self.robot_name = socket.gethostname()
+        logger.info(f"Robot hostname: {self.robot_name}")
+        
+    def get_cached_event_id(self) -> Optional[str]:
+        """Read cached event ID from file."""
+        try:
+            if self.event_id_file.exists():
+                with open(self.event_id_file, 'r') as f:
+                    event_id = f.read().strip()
+                    if event_id:
+                        logger.info(f"Found cached event ID: {event_id}")
+                        return event_id
+        except Exception as e:
+            logger.error(f"Error reading cached event ID: {e}")
+        return None
+    
+    def cache_event_id(self, event_id: str) -> bool:
+        """Write event ID to cache file."""
+        try:
+            # Ensure directory exists
+            self.event_id_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.event_id_file, 'w') as f:
+                f.write(event_id)
+            logger.info(f"Cached event ID: {event_id}")
+            return True
+        except PermissionError:
+            logger.error(f"Permission denied writing to {self.event_id_file}")
+            return False
+        except Exception as e:
+            logger.error(f"Error caching event ID: {e}")
+            return False
+    
+    def get_cluster_url(self) -> Optional[str]:
+        """Resolve cluster URL. If REDIRECT_URL_IS_CLUSTER is set, use REDIRECT_URL as-is.
+        Otherwise follow redirect URL (with auth on each request) to get the cluster URL.
+        """
+        if REDIRECT_URL_IS_CLUSTER:
+            cluster_url = self.redirect_url.split('?')[0].rstrip('/')
+            logger.info(f"Using REDIRECT_URL as cluster URL (no redirect): {cluster_url}")
+            return cluster_url
+        last_error = None
+        for attempt in range(REDIRECT_RETRIES):
+            try:
+                url = self.redirect_url
+                seen = set()
+                for _ in range(10):  # max redirects
+                    if url in seen:
+                        logger.error("Redirect loop detected")
+                        return None
+                    seen.add(url)
+                    logger.info(f"Following redirect URL: {url}")
+                    response = requests.get(
+                        url,
+                        timeout=10,
+                        allow_redirects=False,
+                        auth=self.auth
+                    )
+                    response.raise_for_status()
+                    if response.is_redirect and response.headers.get('Location'):
+                        next_location = response.headers['Location']
+                        if next_location.startswith('/'):
+                            # Resolve relative to the URL we just requested (not redirect_url)
+                            parsed = urlparse(response.url)
+                            url = f"{parsed.scheme}://{parsed.netloc}{next_location}"
+                        else:
+                            url = next_location
+                        continue
+                    # No redirect: use final URL (e.g. 200 or same-host redirect already followed)
+                    cluster_url = response.url.rstrip('/')
+                    logger.info(f"Resolved cluster URL: {cluster_url}")
+                    return cluster_url
+                logger.error("Too many redirects")
+                return None
+            except requests.exceptions.RequestException as e:
+                last_error = e
+                logger.warning(f"Redirect attempt {attempt + 1}/{REDIRECT_RETRIES} failed: {e}")
+                if attempt < REDIRECT_RETRIES - 1 and REDIRECT_RETRY_DELAY > 0:
+                    logger.info(f"Retrying in {REDIRECT_RETRY_DELAY}s")
+                    time.sleep(REDIRECT_RETRY_DELAY)
+        logger.error(f"Error following redirect URL after {REDIRECT_RETRIES} attempts: {last_error}")
+        return None
+    
+    def query_event_id(self, cluster_url: str) -> Optional[str]:
+        """Query OpenShift cluster endpoint for current event ID.
+        cluster_url is the resolved redirect URL and is already the eventId endpoint (e.g. .../control/eventId).
+        """
+        try:
+            event_id_endpoint = cluster_url.split('?')[0].rstrip('/')
+            logger.info(f"Querying event ID from {event_id_endpoint} with robot_name={self.robot_name}")
+            response = requests.get(
+                event_id_endpoint,
+                params={'robot_name': self.robot_name},
+                timeout=10,
+                headers={'Content-Type': 'application/json'},
+                auth=self.auth
+            )
+            response.raise_for_status()
+            
+            # Handle both JSON and plain text responses
+            try:
+                data = response.json()
+                event_id = data.get('event_id') or data.get('eventId') or str(data)
+            except ValueError:
+                event_id = response.text.strip()
+            
+            logger.info(f"Received event ID: {event_id}")
+            return event_id
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error querying event ID endpoint: {e}")
+            return None
+    
+    def query_skupper_token(self, cluster_url: str) -> Optional[str]:
+        """Query OpenShift cluster endpoint for skupper token.
+        cluster_url is the resolved redirect URL (eventId endpoint); derive control base for getToken.
+        """
+        try:
+            # Redirect URL is .../control/eventId; strip last path segment to get .../control
+            control_base = cluster_url.split('?')[0].rstrip('/').rsplit('/', 1)[0]
+            token_endpoint = f"{control_base}/getToken"
+            logger.info(f"Querying skupper token from {token_endpoint} with robot_name={self.robot_name}")
+            response = requests.get(
+                token_endpoint,
+                params={'robot_name': self.robot_name},
+                timeout=10,
+                headers={'Content-Type': 'application/json'},
+                auth=self.auth
+            )
+            response.raise_for_status()
+            
+            # Handle both JSON and plain text responses
+            try:
+                data = response.json()
+                token = data.get('token') or data.get('skupper_token') or str(data)
+            except ValueError:
+                token = response.text.strip()
+            
+            logger.info("Successfully retrieved skupper token")
+            return token
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error querying skupper token endpoint: {e}")
+            return None
+    
+    def check_skupper_tunnel(self) -> bool:
+        """Check if skupper tunnel is up and connected to another site.
+        Requires positive evidence of a connection (e.g. 'connected to ... other site')
+        to avoid false positives when Skupper is still starting after reboot.
+        """
+        try:
+            logger.info("Checking skupper tunnel status")
+            result = subprocess.run(
+                ['skupper', 'status', '-n', 'skupper'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            stdout = (result.stdout or "").lower()
+            if result.returncode != 0:
+                logger.warning("Skupper tunnel appears to be down or not configured")
+                logger.debug(f"Skupper status output: {result.stderr}")
+                return False
+            # Require positive evidence of a connection (e.g. "connected to 1 other site")
+            connected = "connected to" in stdout and "other site" in stdout
+            if connected:
+                logger.info("Skupper tunnel is up and running")
+                logger.debug(f"Skupper status: {result.stdout}")
+                return True
+            logger.info("Skupper is enabled but not connected to any other sites")
+            logger.debug(f"Skupper status: {result.stdout}")
+            return False
+        except FileNotFoundError:
+            logger.warning("Skupper command not found, cannot verify tunnel status")
+            return False
+        except subprocess.TimeoutExpired:
+            logger.warning("Skupper status check timed out")
+            return False
+        except Exception as e:
+            logger.warning(f"Error checking skupper tunnel: {e}")
+            return False
+    
+    def run_ansible_playbook(self, token: str) -> bool:
+        """Run ansible playbook to configure skupper tunnel from robot to OpenShift."""
+        try:
+            logger.info(f"Running ansible playbook: {self.ansible_playbook_path}")
+            
+            # Set token as environment variable for ansible
+            env = os.environ.copy()
+            env['SKUPPER_TOKEN'] = token
+            
+            # Get the ansible directory and playbook name
+            ansible_dir = os.path.dirname(self.ansible_playbook_path)
+            playbook_name = os.path.basename(self.ansible_playbook_path)
+            inventory_path = os.path.join(ansible_dir, 'inventory')
+            
+            result = subprocess.run(
+                ['ansible-playbook', '-i', inventory_path, playbook_name],
+                cwd=ansible_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+            
+            if result.returncode == 0:
+                logger.info("Ansible playbook completed successfully")
+                logger.debug(f"Ansible output: {result.stdout}")
+                return True
+            else:
+                logger.error(f"Ansible playbook failed with return code {result.returncode}")
+                logger.error(f"Ansible stderr: {result.stderr}")
+                return False
+        except subprocess.TimeoutExpired:
+            logger.error("Ansible playbook timed out")
+            return False
+        except FileNotFoundError:
+            logger.error(f"Ansible playbook not found at {self.ansible_playbook_path}")
+            return False
+        except Exception as e:
+            logger.error(f"Error running ansible playbook: {e}")
+            return False
+    
+    def process_event(self) -> bool:
+        """Main processing logic: check event ID and configure if needed.
+        Runs playbook when: new event, tunnel down, or no cached event (e.g. first boot / reboot).
+        """
+        cached_event_id = self.get_cached_event_id()
+
+        # Get cluster URL and current event ID (needed for both branches)
+        cluster_url = self.get_cluster_url()
+        if not cluster_url:
+            logger.warning("Could not resolve cluster URL from redirect, skipping this cycle")
+            if not cached_event_id:
+                logger.warning("No cached event ID - manual intervention may be needed")
+            return False
+
+        current_event_id = self.query_event_id(cluster_url)
+        if not current_event_id:
+            logger.warning("Could not retrieve event ID from cluster, skipping this cycle")
+            if not cached_event_id:
+                logger.warning("No cached event ID - manual intervention may be needed")
+            return False
+
+        # No cached event ID (first boot, reboot with cleared cache, or /etc/eventid missing)
+        if not cached_event_id:
+            logger.info("No cached event ID - will configure tunnel and cache current event")
+            token = self.query_skupper_token(cluster_url)
+            if not token:
+                logger.error("Could not retrieve skupper token - manual intervention may be needed")
+                return False
+            if not self.run_ansible_playbook(token):
+                logger.error("Failed to configure skupper tunnel")
+                return False
+            if self.cache_event_id(current_event_id):
+                logger.info("Tunnel configured and event ID cached")
+                return True
+            logger.warning("Tunnel configured but failed to cache event ID")
+            return False
+
+        # Cached event ID exists: run playbook only if event changed or tunnel is down.
+        event_changed = cached_event_id != current_event_id
+        if event_changed:
+            logger.info(f"New event ID detected: {current_event_id} (was: {cached_event_id}) - reconfiguring tunnel")
+            # Skip tunnel check; we need to run the playbook for the new event
+        else:
+            # Event unchanged: check if tunnel is up (with delay/retries so we don't run playbook too early after reboot)
+            tunnel_up = False
+            if TUNNEL_CHECK_INITIAL_DELAY > 0:
+                logger.info(f"Waiting {TUNNEL_CHECK_INITIAL_DELAY}s before first tunnel check")
+                time.sleep(TUNNEL_CHECK_INITIAL_DELAY)
+            for attempt in range(TUNNEL_CHECK_RETRIES):
+                if self.check_skupper_tunnel():
+                    tunnel_up = True
+                    break
+                if attempt < TUNNEL_CHECK_RETRIES - 1 and TUNNEL_CHECK_INTERVAL > 0:
+                    logger.info(f"Tunnel not up yet, retrying in {TUNNEL_CHECK_INTERVAL}s ({attempt + 2}/{TUNNEL_CHECK_RETRIES})")
+                    time.sleep(TUNNEL_CHECK_INTERVAL)
+            if tunnel_up:
+                logger.info(f"Event ID unchanged ({current_event_id}) and tunnel is up, no configuration needed")
+                return True
+            logger.info(f"Event ID unchanged ({current_event_id}) but tunnel is down, reconfiguring tunnel")
+
+        token = self.query_skupper_token(cluster_url)
+        if not token:
+            logger.error("Could not retrieve skupper token, cannot configure tunnel")
+            return False
+        if not self.run_ansible_playbook(token):
+            logger.error("Failed to configure skupper tunnel")
+            return False
+        if self.cache_event_id(current_event_id):
+            logger.info("Successfully configured for new event")
+            return True
+        logger.warning("Configuration completed but failed to cache event ID")
+        return False
+    
+    def run(self):
+        """Run the service - checks event ID once on startup."""
+        logger.info("Robot Config Service starting...")
+        logger.info(f"Redirect URL: {self.redirect_url}")
+        
+        # Read cached event ID at startup
+        cached_event_id = self.get_cached_event_id()
+        if cached_event_id:
+            logger.info(f"Starting with cached event ID: {cached_event_id}")
+        else:
+            logger.info("No cached event ID found - will check tunnel status")
+        
+        try:
+            success = self.process_event()
+            if success:
+                logger.info("Robot Config Service completed successfully")
+            else:
+                logger.warning("Robot Config Service completed with warnings")
+        except Exception as e:
+            logger.error(f"Error in Robot Config Service: {e}", exc_info=True)
+            sys.exit(1)
+
+
+def main():
+    """Entry point."""
+    service = RobotConfigService()
+    service.run()
+
+
+if __name__ == "__main__":
+    main()
