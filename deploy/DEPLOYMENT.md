@@ -17,58 +17,57 @@ This guide explains how to deploy the Robot Config Service to multiple robots us
 
 ## Quick Start
 
-1. **Create inventory file** (YAML format; use `.yml` extension so Ansible parses it correctly):
+1. **Create inventory file** (YAML; use `.yml` so Ansible applies group vars):
    ```bash
    cp deploy/inventory.robots.example deploy/inventory.robots.yml
    nano deploy/inventory.robots.yml
    ```
 
-2. **Add your robots to inventory:**
+2. **Add robots and override vars** so the playbook generates the systemd override on each robot (no manual edit on robots):
    ```yaml
    robots:
      vars:
        ansible_user: root
        ansible_ssh_private_key_file: ~/.ssh/robot-hackathon
+       api_username: "your_api_user"
+       api_password: "your_api_password"
+       redirect_url: "https://your-short-redirect.example.com/path"
      hosts:
        abcwarrior:
          ansible_host: 192.168.122.180
        robot2:
          ansible_host: 192.168.1.102
    ```
+   Keep this file private (it is in `.gitignore`). Optional vars: see [Override variables (inventory)](#override-variables-inventory) in Step 4.
 
-3. **Test connectivity:**
+3. **Test connectivity and deploy:**
    ```bash
    ansible robots -i deploy/inventory.robots.yml -m ping
-   ```
-
-4. **Deploy to all robots:**
-   ```bash
    ansible-playbook -i deploy/inventory.robots.yml deploy/deploy-robots.yml
    ```
 
-5. **Configure each robot:**
+4. **Start the service on all robots:**
    ```bash
-   # SSH to each robot and edit override file
-   ssh root@192.168.122.180   # or your robot host
-   sudo nano /etc/systemd/system/robot-config-service.service.d/override.conf
+   ansible robots -i deploy/inventory.robots.yml -m systemd \
+     -a "name=robot-config-service state=started" --become
    ```
-   Set `API_USERNAME`, `API_PASSWORD`, and `REDIRECT_URL` (see Step 4 below). Then:
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl start robot-config-service
-   ```
+
+To configure the override manually on each robot instead of from inventory, see [Alternative: manual override](#alternative-manual-override-on-each-robot) in Step 4.
 
 ## Detailed Steps
 
 ### Step 1: Prepare Inventory
 
-Edit `deploy/inventory.robots.yml` with your robot information. Use **YAML format** and a `.yml` extension so Ansible applies group variables correctly:
+Edit `deploy/inventory.robots.yml` with your robots and **override vars** (so the playbook generates the systemd override). Use **YAML format** and a `.yml` extension:
 
 ```yaml
 robots:
   vars:
     ansible_user: root
     ansible_ssh_private_key_file: ~/.ssh/robot-hackathon
+    api_username: "your_api_user"
+    api_password: "your_api_password"
+    redirect_url: "https://your-short-redirect.example.com/path"
   hosts:
     abcwarrior:
       ansible_host: 192.168.122.180
@@ -76,10 +75,7 @@ robots:
       ansible_host: 192.168.1.102
 ```
 
-**Options:**
-- Use hostnames as Ansible host names and `ansible_host` for the real IP or hostname
-- Set `ansible_user` (e.g. `root` or `ubuntu`) and `ansible_ssh_private_key_file` under `vars:` for all robots
-- Add per-host vars (e.g. `team: team-1`) under each host if needed
+**Options:** Use hostnames and `ansible_host` for IP/hostname; set `ansible_user` and `ansible_ssh_private_key_file` under `vars:`; add per-host vars (e.g. `team: team-1`) if needed. Optional override vars: see Step 4.
 
 ### Step 2: Test Connectivity
 
@@ -107,33 +103,13 @@ ansible-playbook -i deploy/inventory.robots.yml deploy/deploy-robots.yml --limit
 ansible-playbook -i deploy/inventory.robots.yml deploy/deploy-robots.yml --check
 ```
 
-### Step 4: Configure Each Robot
+### Step 4: Override Configuration
 
-**Option A: From inventory (recommended)**  
-Set `api_username`, `api_password`, and `redirect_url` in your inventory (group or host vars). The playbook will generate the override file from `deploy/templates/override.conf.j2`:
+The playbook generates the systemd override from inventory vars (see Quick Start and Step 1). Set `api_username`, `api_password`, and `redirect_url` in group or host vars; the template `deploy/templates/override.conf.j2` is used automatically. To only refresh the override: `ansible-playbook -i deploy/inventory.robots.yml deploy/deploy-robots.yml --tags config`.
 
-```yaml
-robots:
-  vars:
-    ansible_user: root
-    ansible_ssh_private_key_file: ~/.ssh/robot-hackathon
-    api_username: "your_api_user"
-    api_password: "your_api_password"
-    redirect_url: "https://your-short-redirect.example.com/path"
-  hosts:
-    robot1:
-      ansible_host: 192.168.1.100
-```
+#### Override variables (inventory) {#override-variables-inventory}
 
-Then run the playbook (or only the config/override step):
-
-```bash
-ansible-playbook -i deploy/inventory.robots.yml deploy/deploy-robots.yml
-# Or update only override: --tags config
-```
-
-**Override variables (inventory)**  
-When using Option A, these inventory vars are passed to `deploy/templates/override.conf.j2`:
+These inventory vars are passed to `deploy/templates/override.conf.j2`:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -149,12 +125,13 @@ When using Option A, these inventory vars are passed to `deploy/templates/overri
 | `redirect_retries` | No | Retries when following redirect URL (default: 3). |
 | `redirect_retry_delay` | No | Seconds between redirect retries (default: 10). |
 
-\* Required only when generating the override from inventory (Option A). Omit them to use Option B (manual override on each robot).
+\* Required when generating the override from inventory. Omit them to use manual override (below).
 
-**Note:** If you store credentials in the inventory, keep that file private (e.g. `deploy/inventory.robots.yml` is in `.gitignore`).
+Keep the inventory file private (e.g. `deploy/inventory.robots.yml` is in `.gitignore`).
 
-**Option B: Manual configuration on each robot**  
-If you do not set the vars in inventory, copy the example override and edit it on each robot. The override must use **`KEY=VALUE`** for each variable:
+#### Alternative: manual override on each robot {#alternative-manual-override-on-each-robot}
+
+If you do not set the override vars in inventory, the playbook copies an example override; then on each robot edit it. Use **`KEY=VALUE`** for each variable:
 
 ```bash
 sudo nano /etc/systemd/system/robot-config-service.service.d/override.conf
@@ -167,12 +144,7 @@ Environment="API_PASSWORD=your_password"
 Environment="REDIRECT_URL=https://your-redirect-service.example.com/redirect"
 ```
 
-Then reload systemd and start the service:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl start robot-config-service
-```
+Then: `sudo systemctl daemon-reload` and `sudo systemctl start robot-config-service`.
 
 ### Step 5: Start Service
 

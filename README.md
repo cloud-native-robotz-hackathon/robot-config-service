@@ -35,15 +35,12 @@ So after a reboot we give Skupper time to start and only run the playbook when t
 
 From the repo root:
 
+**1. Create inventory** (YAML; use `.yml` so group vars apply). Add your robots, SSH key, and **override vars** so the playbook generates the systemd override on each robot:
+
 ```bash
-# 1. Create inventory (YAML; use .yml so group vars apply)
 cp deploy/inventory.robots.example deploy/inventory.robots.yml
-# Edit: add robots, SSH key, and optionally api_username, api_password, redirect_url
 nano deploy/inventory.robots.yml
 ```
-
-**Option A – Override from inventory (recommended)**  
-Set `api_username`, `api_password`, and `redirect_url` in the inventory. The playbook will generate the systemd override on each robot so you don’t edit files on the robots by hand:
 
 ```yaml
 robots:
@@ -58,44 +55,34 @@ robots:
       ansible_host: 192.168.1.100
 ```
 
+**2. Test connectivity and deploy:**
+
 ```bash
-# 2. Test connectivity
 ansible robots -i deploy/inventory.robots.yml -m ping
-
-# 3. Deploy (includes override when vars are set)
 ansible-playbook -i deploy/inventory.robots.yml deploy/deploy-robots.yml
+```
 
-# 4. Start the service on all robots
+**3. Start the service on all robots:**
+
+```bash
 ansible robots -i deploy/inventory.robots.yml -m systemd -a "name=robot-config-service state=started" --become
 ```
 
-**Option B – Configure override manually on each robot**  
-If you don’t set those vars in the inventory, run the playbook as above; then on each robot create the override file (see [Configuration](#configuration)) and start the service.
-
-**Detailed steps, tags, and troubleshooting:** [deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md).
+Keep `inventory.robots.yml` private (it’s in `.gitignore`). Optional override vars and manual override: see [Configuration](#configuration). **Detailed steps, tags, troubleshooting:** [deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md).
 
 ## Configuration
 
-Service behaviour is controlled by the systemd override at `/etc/systemd/system/robot-config-service.service.d/override.conf`. Do not commit real values.
+Service behaviour is controlled by the systemd override at `/etc/systemd/system/robot-config-service.service.d/override.conf`. The normal approach is to set **override vars in the inventory** (see Quick start); the playbook generates the override from `deploy/templates/override.conf.j2`. Do not commit real values.
 
-### From Ansible inventory (recommended)
+**Override vars in inventory** (group or host vars):
 
-Set in group or host vars in `deploy/inventory.robots.yml`:
-
-- **Required for override-from-inventory:** `api_username`, `api_password`, `redirect_url`
+- **Required:** `api_username`, `api_password`, `redirect_url`
 - **Optional:** `ansible_playbook_path`, `log_level`, `tunnel_check_initial_delay`, `tunnel_check_retries`, `tunnel_check_interval`, `redirect_url_is_cluster`, `redirect_retries`, `redirect_retry_delay`
 
-The playbook uses `deploy/templates/override.conf.j2` to generate the override. To only refresh the override from inventory:
+To only refresh the override from inventory: `ansible-playbook -i deploy/inventory.robots.yml deploy/deploy-robots.yml --tags config`
 
-```bash
-ansible-playbook -i deploy/inventory.robots.yml deploy/deploy-robots.yml --tags config
-```
-
-Keep the inventory file that contains credentials out of version control (e.g. `deploy/inventory.robots.yml` is in `.gitignore`).
-
-### Manual override on the robot
-
-If you don’t use inventory vars, on each robot:
+**Alternative: manual override on each robot**  
+If you omit the override vars from the inventory, on each robot:
 
 ```bash
 sudo mkdir -p /etc/systemd/system/robot-config-service.service.d/
@@ -192,6 +179,4 @@ sudo systemctl restart robot-config-service # run again manually
 - **Playbook / token errors**  
   See [deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md) and the Ansible logs. Ensure `SKUPPER_TOKEN` is the full Secret YAML when the playbook runs.
 
-## License
 
-Add a `LICENSE` file to the repository if you publish it. Do not commit real credentials or redirect URLs; use the override (or inventory) only.
