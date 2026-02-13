@@ -43,6 +43,19 @@
       when: python3_check.rc != 0
       tags: [deps, always]
 
+    - name: Install software-properties-common (for add-apt-repository)
+      ansible.builtin.apt:
+        name: software-properties-common
+        state: present
+        update_cache: yes
+      tags: deps
+
+    - name: Add Ansible PPA
+      ansible.builtin.apt_repository:
+        repo: "ppa:ansible/ansible"
+        state: present
+      tags: deps
+
     - name: Install system dependencies
       ansible.builtin.apt:
         name:
@@ -56,6 +69,7 @@
       ansible.builtin.pip:
         name:
           - requests
+          - kubernetes
         state: present
         executable: pip3
       tags: deps
