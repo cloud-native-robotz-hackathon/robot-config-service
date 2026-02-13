@@ -41,6 +41,11 @@ REDIRECT_RETRIES = int(os.getenv("REDIRECT_RETRIES", "3"))
 REDIRECT_RETRY_DELAY = int(os.getenv("REDIRECT_RETRY_DELAY", "10"))
 # If set (1/true/yes), REDIRECT_URL is the cluster/eventId URL; do not perform a GET to follow redirects
 REDIRECT_URL_IS_CLUSTER = os.getenv("REDIRECT_URL_IS_CLUSTER", "").lower() in ("1", "true", "yes")
+# Optional delay (s) before service does anything (e.g. at boot so network/ansible are ready)
+SERVICE_STARTUP_DELAY = int(os.getenv("SERVICE_STARTUP_DELAY", "60"))
+# Playbook retries and delay (s) between attempts for transient failures
+PLAYBOOK_RETRIES = max(1, int(os.getenv("PLAYBOOK_RETRIES", "2")))
+PLAYBOOK_RETRY_DELAY = int(os.getenv("PLAYBOOK_RETRY_DELAY", "30"))
 
 # Setup logging
 logging.basicConfig(
@@ -250,37 +255,51 @@ class RobotConfigService:
             logger.warning(f"Error checking skupper tunnel: {e}")
             return False
     
+    def _run_ansible_playbook_once(self, token: str) -> bool:
+        """Run ansible playbook once. Returns True on success, False on failure."""
+        env = os.environ.copy()
+        env['SKUPPER_TOKEN'] = token
+
+        ansible_dir = os.path.dirname(self.ansible_playbook_path)
+        playbook_name = os.path.basename(self.ansible_playbook_path)
+        inventory_path = os.path.join(ansible_dir, 'inventory')
+
+        cmd = ['ansible-playbook', '-i', inventory_path, playbook_name]
+        if LOG_LEVEL.upper() == 'DEBUG':
+            cmd.extend(['-vv'])
+        logger.info(f"Running ansible playbook: {self.ansible_playbook_path}")
+        logger.info(f"Ansible command: cwd={ansible_dir!r}, cmd={cmd!r}, SKUPPER_TOKEN set=yes")
+
+        result = subprocess.run(
+            cmd,
+            cwd=ansible_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout
+        )
+
+        if result.returncode == 0:
+            logger.info("Ansible playbook completed successfully")
+            logger.debug(f"Ansible stdout: {result.stdout}")
+            return True
+        logger.error(f"Ansible playbook failed with return code {result.returncode}")
+        logger.error("Ansible stdout (last 4096 chars): %s", (result.stdout or "")[-4096:])
+        logger.error("Ansible stderr (last 4096 chars): %s", (result.stderr or "")[-4096:])
+        if len(result.stdout or "") > 4096 or len(result.stderr or "") > 4096:
+            logger.error("Output was truncated above; set LOG_LEVEL=DEBUG and re-run for full -vv ansible output")
+        return False
+
     def run_ansible_playbook(self, token: str) -> bool:
-        """Run ansible playbook to configure skupper tunnel from robot to OpenShift."""
+        """Run ansible playbook to configure skupper tunnel, with optional retries."""
         try:
-            logger.info(f"Running ansible playbook: {self.ansible_playbook_path}")
-            
-            # Set token as environment variable for ansible
-            env = os.environ.copy()
-            env['SKUPPER_TOKEN'] = token
-            
-            # Get the ansible directory and playbook name
-            ansible_dir = os.path.dirname(self.ansible_playbook_path)
-            playbook_name = os.path.basename(self.ansible_playbook_path)
-            inventory_path = os.path.join(ansible_dir, 'inventory')
-            
-            result = subprocess.run(
-                ['ansible-playbook', '-i', inventory_path, playbook_name],
-                cwd=ansible_dir,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=300  # 5 minute timeout
-            )
-            
-            if result.returncode == 0:
-                logger.info("Ansible playbook completed successfully")
-                logger.debug(f"Ansible output: {result.stdout}")
-                return True
-            else:
-                logger.error(f"Ansible playbook failed with return code {result.returncode}")
-                logger.error(f"Ansible stderr: {result.stderr}")
-                return False
+            for attempt in range(1, PLAYBOOK_RETRIES + 1):
+                if attempt > 1:
+                    logger.info(f"Retrying playbook (attempt {attempt}/{PLAYBOOK_RETRIES}) after {PLAYBOOK_RETRY_DELAY}s delay")
+                    time.sleep(PLAYBOOK_RETRY_DELAY)
+                if self._run_ansible_playbook_once(token):
+                    return True
+            return False
         except subprocess.TimeoutExpired:
             logger.error("Ansible playbook timed out")
             return False
@@ -368,6 +387,9 @@ class RobotConfigService:
         """Run the service - checks event ID once on startup."""
         logger.info("Robot Config Service starting...")
         logger.info(f"Redirect URL: {self.redirect_url}")
+        if SERVICE_STARTUP_DELAY > 0:
+            logger.info(f"Waiting {SERVICE_STARTUP_DELAY}s before starting (SERVICE_STARTUP_DELAY)")
+            time.sleep(SERVICE_STARTUP_DELAY)
         
         # Read cached event ID at startup
         cached_event_id = self.get_cached_event_id()
