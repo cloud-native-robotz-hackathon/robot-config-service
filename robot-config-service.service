@@ -7,19 +7,12 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 User=root
-WorkingDirectory=/opt/robot-config
-ExecStart=/usr/bin/python3 /opt/robot-config/robot_config_service.py
+WorkingDirectory=/opt/robot-config-service
+ExecStart=/usr/bin/python3 /opt/robot-config-service/robot_config_service.py
 StandardOutput=journal
 StandardError=journal
 
-# Environment variables (can be overridden in /etc/systemd/system/robot-config-service.service.d/override.conf)
-# REDIRECT_URL is a fixed URL that redirects to the current OpenShift event cluster
-Environment="REDIRECT_URL=https://your-redirect-service.example.com/redirect"
-Environment="ANSIBLE_PLAYBOOK_PATH=/opt/robot-config/ansible/configure-skupper.yml"
-Environment="LOG_LEVEL=INFO"
-# Basic authentication for API endpoints (must be set in override.conf for security)
-# Environment="API_USERNAME=your_username"
-# Environment="API_PASSWORD=your_password"
+EnvironmentFile=/etc/default/robot-config-service
 
 [Install]
 WantedBy=multi-user.target
