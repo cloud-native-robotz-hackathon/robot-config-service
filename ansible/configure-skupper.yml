@@ -1,7 +1,10 @@
 ---
 # Ansible playbook for configuring skupper tunnel FROM robot TO OpenShift cluster
-# This playbook receives the full Skupper connection-token Secret (YAML) via SKUPPER_TOKEN
-# and applies it on the robot to establish the link from the robot to the OpenShift cluster
+# This playbook reads the full Skupper connection-token Secret (YAML) from a token file
+# (default /opt/robot-config/skupper-token, overridable via SKUPPER_TOKEN_FILE or -e skupper_token_file=...)
+# and applies it on the robot to establish the link from the robot to the OpenShift cluster.
+# The playbook never deletes the token file; the service removes it only after the tunnel is verified up.
+# On playbook failure the token file remains so the playbook can be re-run by hand for debugging.
 
 - hosts: localhost
   connection: local
@@ -60,9 +63,13 @@
       ansible.builtin.shell:
         cmd: "/usr/local/bin/skupper init --ingress none --namespace skupper --site-name {{ ansible_hostname }}"
 
-    - name: Get skupper token from environment
+    - name: Resolve skupper token file path
       ansible.builtin.set_fact:
-        token_raw: "{{ lookup('env', 'SKUPPER_TOKEN') }}"
+        skupper_token_file: "{{ skupper_token_file | default(lookup('env', 'SKUPPER_TOKEN_FILE') | default('/opt/robot-config/skupper-token', true), true) }}"
+
+    - name: Get skupper token from token file
+      ansible.builtin.set_fact:
+        token_raw: "{{ lookup('file', skupper_token_file) | trim }}"
       failed_when: token_raw == ""
 
     - name: Parse token and set namespace for robot

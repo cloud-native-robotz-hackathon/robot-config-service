@@ -29,6 +29,8 @@ from typing import Optional
 EVENT_ID_FILE = Path("/etc/eventid")
 REDIRECT_URL = os.getenv("REDIRECT_URL", "")
 ANSIBLE_PLAYBOOK_PATH = os.getenv("ANSIBLE_PLAYBOOK_PATH", "/opt/robot-config/ansible/configure-skupper.yml")
+# Path to cache file holding skupper token (YAML); service writes before running playbook so playbook can run standalone
+SKUPPER_TOKEN_FILE = os.getenv("SKUPPER_TOKEN_FILE", "/opt/robot-config/skupper-token")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 API_USERNAME = os.getenv("API_USERNAME", "")
 API_PASSWORD = os.getenv("API_PASSWORD", "")
@@ -46,6 +48,8 @@ SERVICE_STARTUP_DELAY = int(os.getenv("SERVICE_STARTUP_DELAY", "60"))
 # Playbook retries and delay (s) between attempts for transient failures
 PLAYBOOK_RETRIES = max(1, int(os.getenv("PLAYBOOK_RETRIES", "2")))
 PLAYBOOK_RETRY_DELAY = int(os.getenv("PLAYBOOK_RETRY_DELAY", "30"))
+# Full ansible playbook stdout/stderr are appended to this file; set empty to disable
+ANSIBLE_OUTPUT_LOG = os.getenv("ANSIBLE_OUTPUT_LOG", "/var/log/robot-config-ansible.log").strip()
 
 # Setup logging
 logging.basicConfig(
@@ -254,11 +258,31 @@ class RobotConfigService:
         except Exception as e:
             logger.warning(f"Error checking skupper tunnel: {e}")
             return False
-    
+
+    def _remove_token_file_after_tunnel_up(self) -> None:
+        """If the skupper tunnel is up, remove the token cache file (so it is only removed after success)."""
+        token_path = Path(SKUPPER_TOKEN_FILE)
+        if not token_path.exists():
+            return
+        time.sleep(15)  # give tunnel time to establish after playbook
+        if self.check_skupper_tunnel():
+            try:
+                token_path.unlink()
+                logger.info(f"Tunnel established; removed token file {token_path}")
+            except OSError as e:
+                logger.warning(f"Could not remove token file {token_path}: {e}")
+        else:
+            logger.info("Token file left in place (tunnel not yet up); playbook can be re-run by hand")
+
     def _run_ansible_playbook_once(self, token: str) -> bool:
         """Run ansible playbook once. Returns True on success, False on failure."""
+        token_path = Path(SKUPPER_TOKEN_FILE)
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text(token)
+        token_path.chmod(0o600)
+
         env = os.environ.copy()
-        env['SKUPPER_TOKEN'] = token
+        env['SKUPPER_TOKEN_FILE'] = str(token_path)
 
         ansible_dir = os.path.dirname(self.ansible_playbook_path)
         playbook_name = os.path.basename(self.ansible_playbook_path)
@@ -268,7 +292,7 @@ class RobotConfigService:
         if LOG_LEVEL.upper() == 'DEBUG':
             cmd.extend(['-vv'])
         logger.info(f"Running ansible playbook: {self.ansible_playbook_path}")
-        logger.info(f"Ansible command: cwd={ansible_dir!r}, cmd={cmd!r}, SKUPPER_TOKEN set=yes")
+        logger.info(f"Ansible command: cwd={ansible_dir!r}, cmd={cmd!r}, SKUPPER_TOKEN_FILE={token_path!r}")
 
         result = subprocess.run(
             cmd,
@@ -278,6 +302,25 @@ class RobotConfigService:
             text=True,
             timeout=300  # 5 minute timeout
         )
+
+        if ANSIBLE_OUTPUT_LOG:
+            try:
+                with open(ANSIBLE_OUTPUT_LOG, "a", encoding="utf-8") as f:
+                    f.write(f"\n{'='*60}\n")
+                    f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] returncode={result.returncode} cmd={cmd}\n")
+                    f.write(f"{'='*60}\n")
+                    if result.stdout:
+                        f.write("--- stdout ---\n")
+                        f.write(result.stdout)
+                        if not result.stdout.endswith("\n"):
+                            f.write("\n")
+                    if result.stderr:
+                        f.write("--- stderr ---\n")
+                        f.write(result.stderr)
+                        if not result.stderr.endswith("\n"):
+                            f.write("\n")
+            except OSError as e:
+                logger.warning(f"Could not write ansible output to {ANSIBLE_OUTPUT_LOG}: {e}")
 
         if result.returncode == 0:
             logger.info("Ansible playbook completed successfully")
@@ -343,33 +386,18 @@ class RobotConfigService:
                 return False
             if self.cache_event_id(current_event_id):
                 logger.info("Tunnel configured and event ID cached")
+                self._remove_token_file_after_tunnel_up()
                 return True
             logger.warning("Tunnel configured but failed to cache event ID")
             return False
 
-        # Cached event ID exists: run playbook only if event changed or tunnel is down.
+        # Cached event ID exists: run playbook only if event changed.
         event_changed = cached_event_id != current_event_id
-        if event_changed:
-            logger.info(f"New event ID detected: {current_event_id} (was: {cached_event_id}) - reconfiguring tunnel")
-            # Skip tunnel check; we need to run the playbook for the new event
-        else:
-            # Event unchanged: check if tunnel is up (with delay/retries so we don't run playbook too early after reboot)
-            tunnel_up = False
-            if TUNNEL_CHECK_INITIAL_DELAY > 0:
-                logger.info(f"Waiting {TUNNEL_CHECK_INITIAL_DELAY}s before first tunnel check")
-                time.sleep(TUNNEL_CHECK_INITIAL_DELAY)
-            for attempt in range(TUNNEL_CHECK_RETRIES):
-                if self.check_skupper_tunnel():
-                    tunnel_up = True
-                    break
-                if attempt < TUNNEL_CHECK_RETRIES - 1 and TUNNEL_CHECK_INTERVAL > 0:
-                    logger.info(f"Tunnel not up yet, retrying in {TUNNEL_CHECK_INTERVAL}s ({attempt + 2}/{TUNNEL_CHECK_RETRIES})")
-                    time.sleep(TUNNEL_CHECK_INTERVAL)
-            if tunnel_up:
-                logger.info(f"Event ID unchanged ({current_event_id}) and tunnel is up, no configuration needed")
-                return True
-            logger.info(f"Event ID unchanged ({current_event_id}) but tunnel is down, reconfiguring tunnel")
+        if not event_changed:
+            logger.info(f"Event ID unchanged ({current_event_id}), no action")
+            return True
 
+        logger.info(f"New event ID detected: {current_event_id} (was: {cached_event_id}) - reconfiguring tunnel")
         token = self.query_skupper_token(cluster_url)
         if not token:
             logger.error("Could not retrieve skupper token, cannot configure tunnel")
@@ -379,6 +407,7 @@ class RobotConfigService:
             return False
         if self.cache_event_id(current_event_id):
             logger.info("Successfully configured for new event")
+            self._remove_token_file_after_tunnel_up()
             return True
         logger.warning("Configuration completed but failed to cache event ID")
         return False
