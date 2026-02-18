@@ -224,10 +224,11 @@ class RobotConfigService:
     
     def query_event_id(self, cluster_url: str) -> Optional[str]:
         """Query OpenShift cluster endpoint for current event ID.
-        cluster_url is the resolved redirect URL and is already the eventId endpoint (e.g. .../control/eventId).
+        cluster_url is the cluster base URL; we append control/eventId.
         """
         try:
-            event_id_endpoint = cluster_url.split('?')[0].rstrip('/')
+            base = cluster_url.split('?')[0].rstrip('/')
+            event_id_endpoint = f"{base}/control/eventId"
             logger.info(f"Querying event ID from {event_id_endpoint} with robot_name={self.robot_name}")
             response = requests.get(
                 event_id_endpoint,
@@ -252,8 +253,8 @@ class RobotConfigService:
             return None
     
     def _control_base(self, cluster_url: str) -> str:
-        """Derive control base URL from cluster_url (e.g. .../control/eventId -> .../control)."""
-        return cluster_url.split('?')[0].rstrip('/').rsplit('/', 1)[0]
+        """Derive control base URL from cluster_url (cluster base -> .../control)."""
+        return f"{cluster_url.split('?')[0].rstrip('/')}/control"
 
     def report_init_status(self, cluster_url: str, status: str) -> None:
         """POST robot init status to /control/initStatus (form: robot_name, status)."""
@@ -273,7 +274,7 @@ class RobotConfigService:
 
     def query_skupper_token(self, cluster_url: str) -> Optional[str]:
         """Query OpenShift cluster endpoint for skupper token.
-        cluster_url is the resolved redirect URL (eventId endpoint); derive control base for getToken.
+        cluster_url is the cluster base URL; derive control base for getToken.
         """
         try:
             control_base = self._control_base(cluster_url)
