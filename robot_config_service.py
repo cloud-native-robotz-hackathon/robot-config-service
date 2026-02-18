@@ -460,12 +460,12 @@ class RobotConfigService:
             if not token:
                 logger.error("Could not retrieve skupper token - manual intervention may be needed")
                 return False
-            self.report_init_status(cluster_url, "Starting Playbook")
+            self.report_init_status(cluster_url, "⏳ Starting configure robot")
             if not self.run_ansible_playbook(token):
-                self.report_init_status(cluster_url, "Error")
+                self.report_init_status(cluster_url, "🚨 Failed to configure robot")
                 logger.error("Failed to configure skupper tunnel")
                 return False
-            self.report_init_status(cluster_url, "Okay")
+            self.report_init_status(cluster_url, "✅ 🤖 configured")
             if self.cache_event_id(current_event_id):
                 logger.info("Tunnel configured and event ID cached")
                 self._remove_token_file_after_tunnel_up()
@@ -485,9 +485,9 @@ class RobotConfigService:
         if not token:
             logger.error("Could not retrieve skupper token, cannot configure tunnel")
             return False
-        self.report_init_status(cluster_url, "Starting Playbook")
+        self.report_init_status(cluster_url, "⏳ Starting configure robot")
         if not self.run_ansible_playbook(token):
-            self.report_init_status(cluster_url, "Error")
+            self.report_init_status(cluster_url, "🚨 Failed to configure robot")
             logger.error("Failed to configure skupper tunnel")
             return False
         self.report_init_status(cluster_url, "Okay")
