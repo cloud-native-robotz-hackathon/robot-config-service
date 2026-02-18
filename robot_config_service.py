@@ -28,7 +28,7 @@ from typing import Optional
 # Configuration
 EVENT_ID_FILE = Path("/etc/eventid")
 REDIRECT_URL = os.getenv("REDIRECT_URL", "")
-ANSIBLE_PLAYBOOK_PATH = os.getenv("ANSIBLE_PLAYBOOK_PATH", "/opt/robot-config-service/ansible/configure-skupper.yml")
+ANSIBLE_PLAYBOOK_PATH = os.getenv("ANSIBLE_PLAYBOOK_PATH", "/opt/robot-config-service/ansible/configure-robot.yml")
 # Path to cache file holding skupper token (YAML); service writes before running playbook so playbook can run standalone
 SKUPPER_TOKEN_FILE = os.getenv("SKUPPER_TOKEN_FILE", "/opt/robot-config-service/skupper-token")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
