@@ -3,7 +3,7 @@
 Robot Config Service - MVP
 
 This service runs on a Raspberry Pi robot as a systemd service and checks on startup:
-1. Reads locally cached event ID from /etc/eventid
+1. Reads locally cached event ID from /var/run/robot-config-service/eventid
 2. Queries a fixed redirect URL that points to the current OpenShift event cluster
 3. On that cluster, queries the event ID and checks if it's a new event
 4. If new event: gets skupper token and runs ansible playbook to set up tunnel
@@ -26,11 +26,11 @@ from pathlib import Path
 from typing import Optional
 
 # Configuration
-EVENT_ID_FILE = Path("/etc/eventid")
+EVENT_ID_FILE = Path("/var/run/robot-config-service/eventid")
 REDIRECT_URL = os.getenv("REDIRECT_URL", "")
 ANSIBLE_PLAYBOOK_PATH = os.getenv("ANSIBLE_PLAYBOOK_PATH", "/opt/robot-config-service/ansible/configure-robot.yml")
 # Path to cache file holding skupper token (YAML); service writes before running playbook so playbook can run standalone
-SKUPPER_TOKEN_FILE = os.getenv("SKUPPER_TOKEN_FILE", "/opt/robot-config-service/skupper-token")
+SKUPPER_TOKEN_FILE = os.getenv("SKUPPER_TOKEN_FILE", "/var/run/robot-config-service/skupper-token")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 RCS_HUBCONTROLLER_USER = os.getenv("RCS_HUBCONTROLLER_USER", "")
 RCS_HUBCONTROLLER_PASSWORD = os.getenv("RCS_HUBCONTROLLER_PASSWORD", "")
@@ -457,7 +457,7 @@ class RobotConfigService:
                 logger.warning("No cached event ID - manual intervention may be needed")
             return False
 
-        # No cached event ID (first boot, reboot with cleared cache, or /etc/eventid missing)
+        # No cached event ID (first boot, reboot with cleared cache, or eventid file missing)
         if not cached_event_id:
             self.report_init_status(cluster_url, "EID unknown")
             logger.info("No cached event ID - will configure tunnel and cache current event")
@@ -534,6 +534,8 @@ class RobotConfigService:
 
 def main():
     """Entry point."""
+    EVENT_ID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SKUPPER_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     service = RobotConfigService()
     service.run()
 
