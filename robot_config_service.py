@@ -383,7 +383,7 @@ class RobotConfigService:
             env=env,
             capture_output=True,
             text=True,
-            timeout=300  # 5 minute timeout
+            timeout=600  # 10 minute timeout
         )
 
         if ANSIBLE_OUTPUT_LOG:
