@@ -191,13 +191,32 @@ class RobotConfigService:
             logger.error(f"Error querying event ID endpoint: {e}")
             return None
     
+    def _control_base(self, cluster_url: str) -> str:
+        """Derive control base URL from cluster_url (e.g. .../control/eventId -> .../control)."""
+        return cluster_url.split('?')[0].rstrip('/').rsplit('/', 1)[0]
+
+    def report_init_status(self, cluster_url: str, status: str) -> None:
+        """POST robot init status to /control/initStatus (form: robot_name, status)."""
+        try:
+            control_base = self._control_base(cluster_url)
+            url = f"{control_base}/initStatus"
+            response = requests.post(
+                url,
+                data={'robot_name': self.robot_name, 'status': status},
+                timeout=10,
+                auth=self.auth
+            )
+            response.raise_for_status()
+            logger.debug(f"initStatus reported: {status}")
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Could not report initStatus {status!r}: {e}")
+
     def query_skupper_token(self, cluster_url: str) -> Optional[str]:
         """Query OpenShift cluster endpoint for skupper token.
         cluster_url is the resolved redirect URL (eventId endpoint); derive control base for getToken.
         """
         try:
-            # Redirect URL is .../control/eventId; strip last path segment to get .../control
-            control_base = cluster_url.split('?')[0].rstrip('/').rsplit('/', 1)[0]
+            control_base = self._control_base(cluster_url)
             token_endpoint = f"{control_base}/getToken"
             logger.info(f"Querying skupper token from {token_endpoint} with robot_name={self.robot_name}")
             response = requests.get(
@@ -376,14 +395,18 @@ class RobotConfigService:
 
         # No cached event ID (first boot, reboot with cleared cache, or /etc/eventid missing)
         if not cached_event_id:
+            self.report_init_status(cluster_url, "EID unknown")
             logger.info("No cached event ID - will configure tunnel and cache current event")
             token = self.query_skupper_token(cluster_url)
             if not token:
                 logger.error("Could not retrieve skupper token - manual intervention may be needed")
                 return False
+            self.report_init_status(cluster_url, "Starting Playbook")
             if not self.run_ansible_playbook(token):
+                self.report_init_status(cluster_url, "Error")
                 logger.error("Failed to configure skupper tunnel")
                 return False
+            self.report_init_status(cluster_url, "Okay")
             if self.cache_event_id(current_event_id):
                 logger.info("Tunnel configured and event ID cached")
                 self._remove_token_file_after_tunnel_up()
@@ -394,6 +417,7 @@ class RobotConfigService:
         # Cached event ID exists: run playbook only if event changed.
         event_changed = cached_event_id != current_event_id
         if not event_changed:
+            self.report_init_status(cluster_url, "EID known")
             logger.info(f"Event ID unchanged ({current_event_id}), no action")
             return True
 
@@ -402,9 +426,12 @@ class RobotConfigService:
         if not token:
             logger.error("Could not retrieve skupper token, cannot configure tunnel")
             return False
+        self.report_init_status(cluster_url, "Starting Playbook")
         if not self.run_ansible_playbook(token):
+            self.report_init_status(cluster_url, "Error")
             logger.error("Failed to configure skupper tunnel")
             return False
+        self.report_init_status(cluster_url, "Okay")
         if self.cache_event_id(current_event_id):
             logger.info("Successfully configured for new event")
             self._remove_token_file_after_tunnel_up()
