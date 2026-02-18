@@ -427,12 +427,15 @@ class RobotConfigService:
                     return True
             return False
         except subprocess.TimeoutExpired:
+            self.report_init_status(cluster_url, "🚨 Ansible playbook timed out")
             logger.error("Ansible playbook timed out")
             return False
         except FileNotFoundError:
+            self.report_init_status(cluster_url, "🚨 Ansible playbook not found at {self.ansible_playbook_path}")
             logger.error(f"Ansible playbook not found at {self.ansible_playbook_path}")
             return False
         except Exception as e:
+            self.report_init_status(cluster_url, "🚨 Error running ansible playbook")
             logger.error(f"Error running ansible playbook: {e}")
             return False
     
