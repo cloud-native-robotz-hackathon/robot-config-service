@@ -18,11 +18,6 @@
         name: robot
         tasks_from: reset-microshift.yaml
 
-    - name: Download kubeconfig
-      ansible.builtin.include_role:
-        name: robot
-        tasks_from: download-kubeconfig.yaml
-
     - name: Destroy skupper namespace
       kubernetes.core.k8s:
         state: absent
