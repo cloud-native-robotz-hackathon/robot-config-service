@@ -535,7 +535,7 @@ class RobotConfigService:
 def main():
     """Entry point."""
     EVENT_ID_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SKUPPER_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Path(SKUPPER_TOKEN_FILE).parent.mkdir(parents=True, exist_ok=True)
     service = RobotConfigService()
     service.run()
 
