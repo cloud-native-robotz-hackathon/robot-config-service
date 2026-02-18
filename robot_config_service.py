@@ -28,16 +28,14 @@ from typing import Optional
 # Configuration
 EVENT_ID_FILE = Path("/etc/eventid")
 REDIRECT_URL = os.getenv("REDIRECT_URL", "")
-ANSIBLE_PLAYBOOK_PATH = os.getenv("ANSIBLE_PLAYBOOK_PATH", "/opt/robot-config/ansible/configure-skupper.yml")
+ANSIBLE_PLAYBOOK_PATH = os.getenv("ANSIBLE_PLAYBOOK_PATH", "/opt/robot-config-service/ansible/configure-skupper.yml")
 # Path to cache file holding skupper token (YAML); service writes before running playbook so playbook can run standalone
-SKUPPER_TOKEN_FILE = os.getenv("SKUPPER_TOKEN_FILE", "/opt/robot-config/skupper-token")
+SKUPPER_TOKEN_FILE = os.getenv("SKUPPER_TOKEN_FILE", "/opt/robot-config-service/skupper-token")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 RCS_HUBCONTROLLER_USER = os.getenv("RCS_HUBCONTROLLER_USER", "")
 RCS_HUBCONTROLLER_PASSWORD = os.getenv("RCS_HUBCONTROLLER_PASSWORD", "")
-# Tunnel check: initial delay (s), then retries with interval (s) between. Playbook only if all checks say "down".
-TUNNEL_CHECK_INITIAL_DELAY = int(os.getenv("TUNNEL_CHECK_INITIAL_DELAY", "45"))
-TUNNEL_CHECK_RETRIES = int(os.getenv("TUNNEL_CHECK_RETRIES", "3"))
-TUNNEL_CHECK_INTERVAL = int(os.getenv("TUNNEL_CHECK_INTERVAL", "30"))
+
+
 # Redirect: retries and delay (s) for transient connection/network failures at boot
 REDIRECT_RETRIES = int(os.getenv("REDIRECT_RETRIES", "3"))
 REDIRECT_RETRY_DELAY = int(os.getenv("REDIRECT_RETRY_DELAY", "10"))
@@ -53,7 +51,7 @@ SERVICE_STARTUP_DELAY = int(os.getenv("SERVICE_STARTUP_DELAY", "60"))
 PLAYBOOK_RETRIES = max(1, int(os.getenv("PLAYBOOK_RETRIES", "2")))
 PLAYBOOK_RETRY_DELAY = int(os.getenv("PLAYBOOK_RETRY_DELAY", "30"))
 # Full ansible playbook stdout/stderr are appended to this file; set empty to disable
-ANSIBLE_OUTPUT_LOG = os.getenv("ANSIBLE_OUTPUT_LOG", "/var/log/robot-config-ansible.log").strip()
+ANSIBLE_OUTPUT_LOG = os.getenv("ANSIBLE_OUTPUT_LOG", "/var/log/robot-config-service-ansible.log").strip()
 
 # Setup logging
 logging.basicConfig(
