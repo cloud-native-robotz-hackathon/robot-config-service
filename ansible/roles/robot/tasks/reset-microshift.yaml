@@ -154,6 +154,19 @@
   ansible.builtin.wait_for:
     port: 6443
 
+- name: Wait for node to be ready
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: v1
+      kind: Node
+      metadata:
+        name: "{{ ansible_hostname }}"
+    wait: yes
+    wait_condition:
+      type: Ready
+      status: "True"
+      reason: KubeletReady
+
 - name: Info
   ansible.builtin.debug:
     msg: "Run export KUBECONFIG=kubeconfig-{{ ansible_hostname }}; to have oc/kubectl access."
