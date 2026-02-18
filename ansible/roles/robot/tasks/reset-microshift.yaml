@@ -1,32 +1,4 @@
 ---
-# Check disk
-- name: Get first mount
-  ansible.builtin.set_fact:
-    mount: "{{ ansible_mounts | first }}"
-
-#- name: Calculation...
-#  ansible.builtin.set_fact: 
-#    disk_usage: "{{ mount.size_total - mount.size_available }}"
-#- name: Calculation...
-#  ansible.builtin.set_fact: 
-#    disk_usage_ratio: "{{ disk_usage|float / mount.size_total }}"
-#- name: Calculation...
-#  ansible.builtin.set_fact: 
-#    disk_usage_s: "{{ (disk_usage|float / 1000000000) | round(1, 'common') }}GB"
-#    disk_total_s: "{{ (mount.size_total / 1000000000) | round(1, 'common') }}GB"
-#    disk_usage_ratio_s: "{{ 100 * (disk_usage_ratio|float) | round(1, 'common') }}%"
-#    disk_limit_ratio_s: "{{ (100 * disk_limit|float) |round }}%"
-
-#- name: Disk usage report
-#  ansible.builtin.debug:
-#    msg: "disk usage {{ disk_usage_s }} of total {{ disk_total_s }} ({{ disk_usage_ratio_s }}) (should be within limit {{ disk_limit_ratio_s }})"
-
-#- name: Check disk
-#  ansible.builtin.assert:
-#    that: ( (disk_usage|float)/mount.size_total ) < disk_limit|float
-#    msg: "Disk usage {{ disk_usage_ratio_s }} exceeds {{ disk_limit_ratio_s }}"
-#  any_errors_fatal: true
-
 - name: Stop microshift
   ansible.builtin.systemd_service:
     state: stopped
@@ -114,41 +86,6 @@
     src: "/var/lib/microshift/resources/kubeadmin/kubeconfig"
     dest: "~/.kube/config"
     remote_src: yes
-
-- name: Copy kubeconfig
-  ansible.builtin.copy:
-    src: "/var/lib/microshift/resources/kubeadmin/kubeconfig"
-    dest: "kubeconfig-{{ ansible_hostname }}"
-    remote_src: yes
-
-
-- name: Read kubeconfig
-  include_vars:
-    file: "kubeconfig-{{ ansible_hostname }}"
-    name: kubeconfig
-
-- name: Rebuild new kubeconfig
-  set_fact:
-    kubeconfig: "{{ kubeconfig | combine(fields_to_change, recursive=true) }}"
-  vars:
-    fields_to_change:
-      clusters:
-        - name: "{{ ansible_hostname.split('.') | first }}"
-          cluster:
-            server: "https://{{ ansible_hostname }}:6443"
-            insecure-skip-tls-verify: true
-      contexts:
-        - name: "{{ ansible_hostname.split('.') | first }}"
-          context: 
-            cluster: "{{ ansible_hostname.split('.') | first }}"
-            namespace: "default"
-            user: "user"
-      current-context: "{{ ansible_hostname.split('.') | first }}"
-
-- name: "Write kubeconfig"
-  copy:
-    content: "{{ kubeconfig | to_nice_yaml }}"
-    dest: "kubeconfig-{{ ansible_hostname }}"
 
 - name: Wait for api
   ansible.builtin.wait_for:
