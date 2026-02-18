@@ -32,8 +32,8 @@ ANSIBLE_PLAYBOOK_PATH = os.getenv("ANSIBLE_PLAYBOOK_PATH", "/opt/robot-config/an
 # Path to cache file holding skupper token (YAML); service writes before running playbook so playbook can run standalone
 SKUPPER_TOKEN_FILE = os.getenv("SKUPPER_TOKEN_FILE", "/opt/robot-config/skupper-token")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-API_USERNAME = os.getenv("API_USERNAME", "")
-API_PASSWORD = os.getenv("API_PASSWORD", "")
+RCS_HUBCONTROLLER_USER = os.getenv("RCS_HUBCONTROLLER_USER", "")
+RCS_HUBCONTROLLER_PASSWORD = os.getenv("RCS_HUBCONTROLLER_PASSWORD", "")
 # Tunnel check: initial delay (s), then retries with interval (s) between. Playbook only if all checks say "down".
 TUNNEL_CHECK_INITIAL_DELAY = int(os.getenv("TUNNEL_CHECK_INITIAL_DELAY", "45"))
 TUNNEL_CHECK_RETRIES = int(os.getenv("TUNNEL_CHECK_RETRIES", "3"))
@@ -79,11 +79,11 @@ class RobotConfigService:
         self.ansible_playbook_path = ANSIBLE_PLAYBOOK_PATH
         self.cluster_base_url = None  # Will be set after following redirect
         self.auth = None
-        if API_USERNAME and API_PASSWORD:
-            self.auth = HTTPBasicAuth(API_USERNAME, API_PASSWORD)
+        if RCS_HUBCONTROLLER_USER and RCS_HUBCONTROLLER_PASSWORD:
+            self.auth = HTTPBasicAuth(RCS_HUBCONTROLLER_USER, RCS_HUBCONTROLLER_PASSWORD)
             logger.info("Basic authentication configured")
         else:
-            logger.warning("API_USERNAME or API_PASSWORD not set - API calls may fail")
+            logger.warning("RCS_HUBCONTROLLER_USER or RCS_HUBCONTROLLER_PASSWORD not set - API calls may fail")
         self.robot_name = socket.gethostname()
         logger.info(f"Robot hostname: {self.robot_name}")
         

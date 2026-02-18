@@ -94,8 +94,8 @@ Use **`KEY=VALUE`** for each variable, for example:
 
 ```ini
 [Service]
-Environment="API_USERNAME=your_username"
-Environment="API_PASSWORD=your_password"
+Environment="RCS_HUBCONTROLLER_USER=your_username"
+Environment="RCS_HUBCONTROLLER_PASSWORD=your_password"
 Environment="REDIRECT_URL=https://your-redirect-service.example.com/redirect"
 ```
 
@@ -111,8 +111,8 @@ sudo systemctl start robot-config-service
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `REDIRECT_URL` | Yes | Full URL (e.g. `https://...`) that redirects to the current OpenShift event cluster. Auth is sent on each redirect. |
-| `API_USERNAME` | Yes | Basic auth username for redirect and cluster API. |
-| `API_PASSWORD` | Yes | Basic auth password. |
+| `RCS_HUBCONTROLLER_USER` | Yes | Basic auth username for redirect and cluster API. |
+| `RCS_HUBCONTROLLER_PASSWORD` | Yes | Basic auth password. |
 | `ANSIBLE_PLAYBOOK_PATH` | No | Default: `/opt/robot-config/ansible/configure-skupper.yml` |
 | `LOG_LEVEL` | No | Default: `INFO` |
 | `TUNNEL_CHECK_INITIAL_DELAY` | No | Seconds before first tunnel check after reboot (default: 45). |
@@ -171,7 +171,7 @@ sudo systemctl restart robot-config-service # run again manually
 ## Troubleshooting
 
 - **401 Unauthorized on redirect**  
-  Ensure `API_USERNAME` and `API_PASSWORD` are set in the override (or in inventory) and that the override uses `Environment="API_USERNAME=..."` (not just the value). Reload systemd and restart the service after editing.
+  Ensure `RCS_HUBCONTROLLER_USER` and `RCS_HUBCONTROLLER_PASSWORD` are set in the override (or in inventory) and that the override uses `Environment="RCS_HUBCONTROLLER_USER=..."` (not just the value). Reload systemd and restart the service after editing.
 
 - **Tunnel reported up but it isn’t**  
   The service only treats the tunnel as up if `skupper status -n skupper` output contains “connected to” and “other site”. If Skupper is still starting, the service waits and retries (see `TUNNEL_CHECK_*`).
