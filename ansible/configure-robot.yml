@@ -12,11 +12,15 @@
   tags: 
     -  robots
   tasks:
-
     - name: Reset MicroShift
       ansible.builtin.include_role:
         name: robot
         tasks_from: reset-microshift.yaml
+
+    - name: Cleanup container images
+      ansible.builtin.include_role:
+        name: robot
+        tasks_from: cleanup-container-images.yaml
 
     - name: Destroy skupper namespace
       kubernetes.core.k8s:
