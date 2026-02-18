@@ -180,3 +180,13 @@ sudo systemctl restart robot-config-service # run again manually
   See [deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md) and the Ansible logs. Ensure `SKUPPER_TOKEN` is the full Secret YAML when the playbook runs.
 
 
+## Local development
+
+Create a copy of `robot-config-service.env.example`: `cp -v robot-config-service.env.example robot-config-service.env`. Adjust `robot-config-service.env`
+
+```shell
+podman build -t local -f Containerfile.development .
+podman run -v $(pwd):/opt/app-root/src --user 0 -ti --rm local bash 
+source robot-config-service.env
+python robot_config_service.py
+```

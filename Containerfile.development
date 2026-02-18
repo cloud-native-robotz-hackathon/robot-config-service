@@ -1,0 +1,4 @@
+FROM registry.access.redhat.com/ubi9/python-312:latest
+
+ADD requirements.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements.txt

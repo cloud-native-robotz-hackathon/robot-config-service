@@ -37,3 +37,4 @@ deploy/*.vault
 
 # Stray / editor artifacts
 {changed*
+robot-config-service.env

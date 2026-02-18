@@ -43,6 +43,10 @@ REDIRECT_RETRIES = int(os.getenv("REDIRECT_RETRIES", "3"))
 REDIRECT_RETRY_DELAY = int(os.getenv("REDIRECT_RETRY_DELAY", "10"))
 # If set (1/true/yes), REDIRECT_URL is the cluster/eventId URL; do not perform a GET to follow redirects
 REDIRECT_URL_IS_CLUSTER = os.getenv("REDIRECT_URL_IS_CLUSTER", "").lower() in ("1", "true", "yes")
+# GitHub raw: repo URL (e.g. https://github.com/org/robot-auto-register-78b09.git) and token for private repos
+RCS_GIT_REPO = os.getenv("RCS_GIT_REPO", "").strip()
+RCS_GH_TOKEN = os.getenv("RCS_GH_TOKEN", "").strip()
+RCS_GIT_BRANCH = os.getenv("RCS_GIT_BRANCH", "main").strip() or "main"
 # Optional delay (s) before service does anything (e.g. at boot so network/ansible are ready)
 SERVICE_STARTUP_DELAY = int(os.getenv("SERVICE_STARTUP_DELAY", "60"))
 # Playbook retries and delay (s) between attempts for transient failures
@@ -69,9 +73,9 @@ class RobotConfigService:
     def __init__(self):
         self.event_id_file = EVENT_ID_FILE
         self.redirect_url = REDIRECT_URL
-        if not self.redirect_url:
-            logger.error("REDIRECT_URL environment variable is not set - service cannot run")
-            raise ValueError("REDIRECT_URL environment variable is required")
+        if not self.redirect_url and not RCS_GIT_REPO:
+            logger.error("Either REDIRECT_URL or RCS_GIT_REPO environment variable is required - service cannot run")
+            raise ValueError("REDIRECT_URL or RCS_GIT_REPO environment variable is required")
         self.ansible_playbook_path = ANSIBLE_PLAYBOOK_PATH
         self.cluster_base_url = None  # Will be set after following redirect
         self.auth = None
@@ -112,14 +116,70 @@ class RobotConfigService:
             logger.error(f"Error caching event ID: {e}")
             return False
     
+    def _github_raw_base_url(self) -> Optional[str]:
+        """Build raw.githubusercontent.com base URL from RCS_GIT_REPO (e.g. https://github.com/org/repo.git)."""
+        if not RCS_GIT_REPO:
+            return None
+        try:
+            parsed = urlparse(RCS_GIT_REPO.strip())
+            if parsed.netloc != "github.com" or not parsed.path:
+                logger.warning(f"RCS_GIT_REPO does not look like a GitHub repo URL: {RCS_GIT_REPO}")
+                return None
+            path = parsed.path.strip("/")
+            if path.endswith(".git"):
+                path = path[:-4]
+            if "/" not in path:
+                return None
+            return f"https://raw.githubusercontent.com/{path}/{RCS_GIT_BRANCH}"
+        except Exception as e:
+            logger.warning(f"Could not derive GitHub raw base from RCS_GIT_REPO: {e}")
+            return None
+
+    def _fetch_cluster_url_from_github_raw(self, raw_base: str) -> Optional[str]:
+        """Fetch cluster URL from GitHub raw: try .../ROBOT_NAME then .../catch-all. Uses RCS_GH_TOKEN if set."""
+        headers = {}
+        if RCS_GH_TOKEN:
+            headers["Authorization"] = f"token {RCS_GH_TOKEN}"
+        for name in (self.robot_name, "catch-all"):
+            url = f"{raw_base.rstrip('/')}/{name}"
+            try:
+                logger.info(f"Fetching cluster URL from GitHub raw: {url}")
+                response = requests.get(url, timeout=10, headers=headers or None)
+                if response.status_code == 200:
+                    cluster_url = response.text.strip()
+                    if cluster_url:
+                        logger.info(f"Resolved cluster URL from {name}: {cluster_url}")
+                        return cluster_url
+                elif response.status_code != 404:
+                    logger.warning(f"GitHub raw {url} returned {response.status_code}")
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Failed to fetch {url}: {e}")
+        return None
+
     def get_cluster_url(self) -> Optional[str]:
         """Resolve cluster URL. If REDIRECT_URL_IS_CLUSTER is set, use REDIRECT_URL as-is.
+        If RCS_GIT_REPO is set, fetch from GitHub raw: try .../ROBOT_NAME then .../catch-all.
         Otherwise follow redirect URL (with auth on each request) to get the cluster URL.
         """
-        if REDIRECT_URL_IS_CLUSTER:
+        if REDIRECT_URL_IS_CLUSTER and self.redirect_url:
             cluster_url = self.redirect_url.split('?')[0].rstrip('/')
             logger.info(f"Using REDIRECT_URL as cluster URL (no redirect): {cluster_url}")
             return cluster_url
+        raw_base = self._github_raw_base_url()
+        if raw_base:
+            last_error = None
+            for attempt in range(REDIRECT_RETRIES):
+                cluster_url = self._fetch_cluster_url_from_github_raw(raw_base)
+                if cluster_url:
+                    return cluster_url
+                if attempt < REDIRECT_RETRIES - 1 and REDIRECT_RETRY_DELAY > 0:
+                    logger.info(f"Retrying in {REDIRECT_RETRY_DELAY}s")
+                    time.sleep(REDIRECT_RETRY_DELAY)
+            logger.error("Could not fetch cluster URL from GitHub raw (tried robot name and catch-all)")
+            return None
+        if not self.redirect_url:
+            logger.error("No REDIRECT_URL and GitHub raw fetch did not return a URL")
+            return None
         last_error = None
         for attempt in range(REDIRECT_RETRIES):
             try:
@@ -442,7 +502,10 @@ class RobotConfigService:
     def run(self):
         """Run the service - checks event ID once on startup."""
         logger.info("Robot Config Service starting...")
-        logger.info(f"Redirect URL: {self.redirect_url}")
+        if self.redirect_url:
+            logger.info(f"Redirect URL: {self.redirect_url}")
+        if RCS_GIT_REPO:
+            logger.info(f"Cluster URL source: GitHub raw (RCS_GIT_REPO)")
         if SERVICE_STARTUP_DELAY > 0:
             logger.info(f"Waiting {SERVICE_STARTUP_DELAY}s before starting (SERVICE_STARTUP_DELAY)")
             time.sleep(SERVICE_STARTUP_DELAY)
