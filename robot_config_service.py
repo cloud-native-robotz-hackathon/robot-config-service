@@ -273,32 +273,37 @@ class RobotConfigService:
     def query_skupper_token(self, cluster_url: str) -> Optional[str]:
         """Query OpenShift cluster endpoint for skupper token.
         cluster_url is the cluster base URL; derive control base for getToken.
+        Retries the /getToken call until HTTP 200 is returned.
         """
-        try:
-            control_base = self._control_base(cluster_url)
-            token_endpoint = f"{control_base}/getToken"
-            logger.info(f"Querying skupper token from {token_endpoint} with robot_name={self.robot_name}")
-            response = requests.get(
-                token_endpoint,
-                params={'robot_name': self.robot_name},
-                timeout=10,
-                headers={'Content-Type': 'application/json'},
-                auth=self.auth
-            )
-            response.raise_for_status()
-            
-            # Handle both JSON and plain text responses
+        control_base = self._control_base(cluster_url)
+        token_endpoint = f"{control_base}/getToken"
+        logger.info(f"Querying skupper token from {token_endpoint} with robot_name={self.robot_name}")
+        self.report_init_status(cluster_url, "⏳ Querying skupper token")
+        while True:
             try:
-                data = response.json()
-                token = data.get('token') or data.get('skupper_token') or str(data)
-            except ValueError:
-                token = response.text.strip()
-            
-            logger.info("Successfully retrieved skupper token")
-            return token
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error querying skupper token endpoint: {e}")
-            return None
+                response = requests.get(
+                    token_endpoint,
+                    params={'robot_name': self.robot_name},
+                    timeout=10,
+                    headers={'Content-Type': 'application/json'},
+                    auth=self.auth
+                )
+                if response.status_code == 200:
+                    # Handle both JSON and plain text responses
+                    try:
+                        data = response.json()
+                        token = data.get('token') or data.get('skupper_token') or str(data)
+                    except ValueError:
+                        token = response.text.strip()
+                    logger.info("Successfully retrieved skupper token")
+                    self.report_init_status(cluster_url, "✅ Successfully retrieved skupper token")
+                    return token
+                logger.warning(
+                    f"getToken returned HTTP {response.status_code}, retrying in 5s..."
+                )
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Error querying skupper token endpoint: {e}, retrying in 5s...")
+            time.sleep(5)
     
     def check_skupper_tunnel(self) -> bool:
         """Check if skupper tunnel is up and connected to another site.
