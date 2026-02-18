@@ -103,7 +103,3 @@
       type: Ready
       status: "True"
       reason: KubeletReady
-
-- name: Info
-  ansible.builtin.debug:
-    msg: "Run export KUBECONFIG=kubeconfig-{{ ansible_hostname }}; to have oc/kubectl access."

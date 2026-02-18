@@ -26,7 +26,6 @@
       kubernetes.core.k8s:
         state: absent
         wait: true
-        kubeconfig: "kubeconfig-{{ ansible_hostname }}"
         definition:
           apiVersion: v1
           kind: Namespace
@@ -38,7 +37,6 @@
       kubernetes.core.k8s:
         state: present
         wait: true
-        kubeconfig: "kubeconfig-{{ ansible_hostname }}"
         definition:
           apiVersion: v1
           kind: Namespace
@@ -64,7 +62,7 @@
 
     - name: Resolve skupper token file path
       ansible.builtin.set_fact:
-        skupper_token_file: "{{ skupper_token_file | default(lookup('env', 'SKUPPER_TOKEN_FILE') | default('/opt/robot-config/skupper-token', true), true) }}"
+        skupper_token_file: "{{ skupper_token_file | default(lookup('env', 'SKUPPER_TOKEN_FILE') | default('/var/run/robot-config-service/skupper-token', true), true) }}"
 
     - name: Get skupper token from token file
       ansible.builtin.set_fact:
@@ -91,7 +89,6 @@
     - name: Apply token at robot
       kubernetes.core.k8s:
         state: present
-        kubeconfig: "{{ playbook_dir }}/kubeconfig-{{ ansible_hostname }}"
         src: /tmp/skupper-token.yaml
 
     - name: Remove temp token file
@@ -105,7 +102,6 @@
         - reverse-proxy
       kubernetes.core.k8s:
         state: present
-        kubeconfig: "kubeconfig-{{ ansible_hostname  }}"
         wait: yes
         wait_condition:
           type: Available
