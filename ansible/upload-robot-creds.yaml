@@ -1,0 +1,9 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: yes
+  tasks:
+    - name: Upload robot creds to hub-controller
+      ansible.builtin.include_role:
+        name: robot
+        tasks_from: upload-robot-creds.yaml

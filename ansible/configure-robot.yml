@@ -17,6 +17,11 @@
         name: robot
         tasks_from: reset-microshift.yaml
 
+    - name: Upload robot creds to hub-controller
+      ansible.builtin.include_role:
+        name: robot
+        tasks_from: upload-robot-creds.yaml
+
     - name: Cleanup container images
       ansible.builtin.include_role:
         name: robot

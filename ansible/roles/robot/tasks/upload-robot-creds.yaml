@@ -1,0 +1,24 @@
+---
+- name: Read kubeconfig
+  delegate_to: localhost
+  include_vars:
+    file: "/var/lib/microshift/resources/kubeadmin/kubeconfig"
+    name: kubeconfig
+
+- name: Upload kubeconfig to hub-controller
+  ansible.builtin.uri:
+    url: "{{ hub_controller_url | default(lookup('env', 'RCS_HUBCONTROLLER_URL'), true) }}/control/setRobotCreds"
+    method: POST
+    user: "{{ hub_controller_user | default(lookup('env', 'RCS_HUBCONTROLLER_USER') | default('admin', true), true) }}"
+    password: "{{ hub_controller_password | default(lookup('env', 'RCS_HUBCONTROLLER_PASSWORD') | default('admin', true), true) }}"
+    headers:
+      Accept: text/plain
+      Content-Type: application/x-www-form-urlencoded
+    body_format: form-urlencoded
+    body:
+      robot_name: "{{ ansible_hostname.split('.') | first }}"
+      ca_cert: "{{ kubeconfig.clusters[0].cluster['certificate-authority-data'] }}"
+      client_cert: "{{ kubeconfig.users[0].user['client-certificate-data'] }}"
+      client_key: "{{ kubeconfig.users[0].user['client-key-data'] }}"
+  delegate_to: localhost
+  when: kubeconfig is defined

@@ -371,7 +371,7 @@ class RobotConfigService:
         ansible_dir = os.path.dirname(self.ansible_playbook_path)
         playbook_name = os.path.basename(self.ansible_playbook_path)
         inventory_path = os.path.join(ansible_dir, 'inventory')
-
+ 
         cmd = ['ansible-playbook', '-i', inventory_path, playbook_name]
         if LOG_LEVEL.upper() == 'DEBUG':
             cmd.extend(['-vv'])
