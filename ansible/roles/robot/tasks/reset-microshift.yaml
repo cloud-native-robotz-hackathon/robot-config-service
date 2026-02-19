@@ -9,11 +9,11 @@
     state: absent
     path: /var/lib/microshift
 
-- name: Check / configure /etc/hosts (robot.local, $inventoryname.lan)
+- name: Check / configure /etc/hosts ($inventoryname.lan)
   ansible.builtin.lineinfile:
     path: /etc/hosts
     regexp: 'robot\.local'
-    line: "{{ ansible_host }} robot.local {{ ansible_hostname.split('.') | first }}.lan {{ ansible_hostname }}"
+    line: "{{ ansible_host }} {{ ansible_hostname.split('.') | first }}.lan {{ ansible_hostname }}"
 
 - name: Creating Microshift config
   ansible.builtin.copy:
