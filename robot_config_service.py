@@ -366,6 +366,7 @@ class RobotConfigService:
 
         env = os.environ.copy()
         env['SKUPPER_TOKEN_FILE'] = str(token_path)
+        env['RCS_HUBCONTROLLER_URL'] = str(self.cluster_base_url)
 
         ansible_dir = os.path.dirname(self.ansible_playbook_path)
         playbook_name = os.path.basename(self.ansible_playbook_path)
