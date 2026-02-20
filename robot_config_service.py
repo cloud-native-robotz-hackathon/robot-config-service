@@ -75,7 +75,6 @@ class RobotConfigService:
             logger.error("Either REDIRECT_URL or RCS_GIT_REPO environment variable is required - service cannot run")
             raise ValueError("REDIRECT_URL or RCS_GIT_REPO environment variable is required")
         self.ansible_playbook_path = ANSIBLE_PLAYBOOK_PATH
-        self.cluster_base_url = None  # Will be set after following redirect
         self.auth = None
         if RCS_HUBCONTROLLER_USER and RCS_HUBCONTROLLER_PASSWORD:
             self.auth = HTTPBasicAuth(RCS_HUBCONTROLLER_USER, RCS_HUBCONTROLLER_PASSWORD)
@@ -357,7 +356,7 @@ class RobotConfigService:
         else:
             logger.info("Token file left in place (tunnel not yet up); playbook can be re-run by hand")
 
-    def _run_ansible_playbook_once(self, token: str) -> bool:
+    def _run_ansible_playbook_once(self,cluster_url: str, token: str) -> bool:
         """Run ansible playbook once. Returns True on success, False on failure."""
         token_path = Path(SKUPPER_TOKEN_FILE)
         token_path.parent.mkdir(parents=True, exist_ok=True)
@@ -366,7 +365,7 @@ class RobotConfigService:
 
         env = os.environ.copy()
         env['SKUPPER_TOKEN_FILE'] = str(token_path)
-        env['RCS_HUBCONTROLLER_URL'] = str(self.cluster_base_url)
+        env['RCS_HUBCONTROLLER_URL'] = str(cluster_url)
 
         ansible_dir = os.path.dirname(self.ansible_playbook_path)
         playbook_name = os.path.basename(self.ansible_playbook_path)
@@ -417,14 +416,14 @@ class RobotConfigService:
             logger.error("Output was truncated above; set LOG_LEVEL=DEBUG and re-run for full -vv ansible output")
         return False
 
-    def run_ansible_playbook(self, token: str) -> bool:
+    def run_ansible_playbook(self,cluster_url: str, token: str) -> bool:
         """Run ansible playbook to configure skupper tunnel, with optional retries."""
         try:
             for attempt in range(1, PLAYBOOK_RETRIES + 1):
                 if attempt > 1:
                     logger.info(f"Retrying playbook (attempt {attempt}/{PLAYBOOK_RETRIES}) after {PLAYBOOK_RETRY_DELAY}s delay")
                     time.sleep(PLAYBOOK_RETRY_DELAY)
-                if self._run_ansible_playbook_once(token):
+                if self._run_ansible_playbook_once(cluster_url,token):
                     return True
             return False
         except subprocess.TimeoutExpired:
@@ -470,7 +469,7 @@ class RobotConfigService:
                 logger.error("Could not retrieve skupper token - manual intervention may be needed")
                 return False
             self.report_init_status(cluster_url, "⏳ Starting configure robot")
-            if not self.run_ansible_playbook(token):
+            if not self.run_ansible_playbook(cluster_url,token):
                 self.report_init_status(cluster_url, "🚨 Failed to configure robot")
                 logger.error("Failed to configure skupper tunnel")
                 return False
@@ -495,7 +494,7 @@ class RobotConfigService:
             logger.error("Could not retrieve skupper token, cannot configure tunnel")
             return False
         self.report_init_status(cluster_url, "⏳ Starting configure robot")
-        if not self.run_ansible_playbook(token):
+        if not self.run_ansible_playbook(cluster_url,token):
             self.report_init_status(cluster_url, "🚨 Failed to configure robot")
             logger.error("Failed to configure skupper tunnel")
             return False

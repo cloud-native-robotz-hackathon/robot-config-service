@@ -7,7 +7,7 @@
 
 - name: Upload kubeconfig to hub-controller
   ansible.builtin.uri:
-    url: "{{ lookup('env', 'RCS_HUBCONTROLLER_URL')}}control/setRobotCreds"
+    url: "{{ lookup('env', 'RCS_HUBCONTROLLER_URL')}}/control/setRobotCreds"
     method: POST
     url_username: "{{ lookup('env', 'RCS_HUBCONTROLLER_USER') }}"
     url_password: "{{ lookup('env', 'RCS_HUBCONTROLLER_PASSWORD') }}"
